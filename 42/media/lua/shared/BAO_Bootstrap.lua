@@ -142,6 +142,13 @@ end
 -------------------------------------------------------
 -- ЗАВЕРШЕНИЕ ИНИЦИАЛИЗАЦИИ
 -------------------------------------------------------
+if BAO.NPCData
+        and BAO.NPCData.InitializeDefaults then
+        BAO.NPCData.InitializeDefaults()
+        BAO.Log("NPC data system initialized")
+    else
+        BAO.Log("ERROR: NPC data system is not available")
+    end
 
 BAO.Log("Initialization finished")
 
