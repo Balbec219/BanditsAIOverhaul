@@ -1,0 +1,1 @@
+print("[BanditsAIOverhaul] Test script loaded successfully")
