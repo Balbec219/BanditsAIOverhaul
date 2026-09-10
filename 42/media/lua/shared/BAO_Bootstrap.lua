@@ -150,8 +150,13 @@ if BAO.NPCData
         BAO.Log("ERROR: NPC data system is not available")
     end
 
-BAO.Log("Initialization finished")
+if BAO.PlayerDiagnostics then
+        BAO.Log("Player diagnostics module loaded")
+    else
+        BAO.Log("WARNING: Player diagnostics module is not available")
+    end
 
+BAO.Log("Initialization finished")
 end
 
 
