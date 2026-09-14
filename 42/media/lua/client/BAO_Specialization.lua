@@ -1475,10 +1475,32 @@ function Specialization.Calculate(profile, roleName)
         return nil
     end
 
+
+    --------------------------------------------------------
+    -- Safety:
+    -- roleName may come from RoleScoring as a table.
+    --
+    -- Example:
+    -- {
+    --     Role = "survival",
+    --     Score = 39.75
+    -- }
+    --------------------------------------------------------
+
+    if type(roleName) == "table" then
+
+        roleName = roleName.Role
+
+    end
+
+
     if not roleName or roleName == "" then
         Log("ERROR: roleName is nil")
         return nil
     end
+
+
+    roleName = tostring(roleName)
 
     local roleSpecializations =
         Specialization.RoleSpecializations[roleName]
@@ -1564,6 +1586,42 @@ function Specialization.CalculateFromProfile(profile)
         Log("ERROR: PrimaryRole not found")
         return nil
     end
+
+
+    --------------------------------------------------------
+    -- RoleScoring stores PrimaryRole as a table:
+    --
+    -- {
+    --     Role = "survival",
+    --     Score = 39.75
+    -- }
+    --
+    -- Specialization system needs the role ID:
+    --
+    -- "survival"
+    --------------------------------------------------------
+
+    if type(primaryRole) == "table" then
+
+        primaryRole =
+            primaryRole.Role
+
+    end
+
+
+    if not primaryRole then
+        Log("ERROR: Could not extract role ID from PrimaryRole")
+        return nil
+    end
+
+
+    primaryRole = tostring(primaryRole)
+
+    Log(
+        "Primary role detected: "
+        .. primaryRole
+    )
+
 
     return Specialization.Calculate(
         profile,
