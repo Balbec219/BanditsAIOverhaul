@@ -1,0 +1,158 @@
+name: Discord Dev Log
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Send all existing commits to Discord"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  discord:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Send commits to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.sha }}
+          BACKFILL: ${{ inputs.backfill }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 <<'PY'
+          import os
+          import subprocess
+          import json
+          import time
+          import urllib.request
+          import urllib.error
+
+          webhook = os.environ["DISCORD_WEBHOOK_URL"]
+          before = os.environ.get("EVENT_BEFORE", "")
+          after = os.environ.get("EVENT_AFTER", "")
+          backfill = os.environ.get("BACKFILL", "").lower() == "true"
+          repository = os.environ["REPOSITORY"]
+
+          def git(*args):
+              return subprocess.check_output(
+                  ["git", *args],
+                  text=True,
+                  stderr=subprocess.STDOUT
+              ).strip()
+
+          if backfill:
+              print("Backfill mode: sending all commits...")
+              commit_list = git(
+                  "log",
+                  "--reverse",
+                  "--format=%H"
+              ).splitlines()
+          else:
+              print("Push mode: sending commits from this push...")
+
+              if not before or before == "0000000000000000000000000000000000000000":
+                  commit_list = git(
+                      "log",
+                      "--reverse",
+                      "--format=%H",
+                      after
+                  ).splitlines()
+              else:
+                  commit_list = git(
+                      "rev-list",
+                      "--reverse",
+                      f"{before}..{after}"
+                  ).splitlines()
+
+          print(f"Commits to send: {len(commit_list)}")
+
+          for commit in commit_list:
+              subject = git("log", "-1", "--format=%s", commit)
+              body = git("log", "-1", "--format=%b", commit)
+              author = git("log", "-1", "--format=%an", commit)
+              date = git("log", "-1", "--format=%ad", "--date=format:%Y-%m-%d %H:%M", commit)
+
+              short_hash = commit[:7]
+
+              commit_url = (
+                  f"https://github.com/{repository}/commit/{commit}"
+              )
+
+              if len(subject) > 256:
+                  subject = subject[:253] + "..."
+
+              if len(body) > 1500:
+                  body = body[:1497] + "..."
+
+              embed = {
+                  "title": f"🛠️ {subject}",
+                  "url": commit_url,
+                  "description": body if body else "Без дополнительного описания.",
+                  "color": 3447003,
+                  "fields": [
+                      {
+                          "name": "👤 Автор",
+                          "value": author,
+                          "inline": True
+                      },
+                      {
+                          "name": "🔖 Commit",
+                          "value": f"`{short_hash}`",
+                          "inline": True
+                      },
+                      {
+                          "name": "🌿 Ветка",
+                          "value": "main",
+                          "inline": True
+                      }
+                  ],
+                  "footer": {
+                      "text": f"BanditsAIOverhaul • {date}"
+                  }
+              }
+
+              payload = {
+                  "username": "BAIO Git",
+                  "embeds": [embed]
+              }
+
+              data = json.dumps(payload).encode("utf-8")
+
+              request = urllib.request.Request(
+                  webhook,
+                  data=data,
+                  headers={
+                      "Content-Type": "application/json",
+                      "User-Agent": "BanditsAIOverhaul-GitHub-Actions"
+                  },
+                  method="POST"
+              )
+
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      print(
+                          f"Sent {short_hash}: {subject} "
+                          f"(HTTP {response.status})"
+                      )
+              except urllib.error.HTTPError as error:
+                  print(
+                      f"Discord error for {short_hash}: "
+                      f"HTTP {error.code}"
+                  )
+                  print(error.read().decode("utf-8", errors="replace"))
+                  raise
+
+              time.sleep(1)
+          PY
