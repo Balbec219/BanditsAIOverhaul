@@ -1,385 +1,1393 @@
 ---@diagnostic disable: undefined-global
 
+------------------------------------------------------------
+-- BanditsAIOverhaul
+-- BAO_PlayerProfile.lua
+--
+-- Player Profile V2
+--
+-- Архитектура:
+--
+-- Player
+--   ↓
+-- Raw Data
+--   ├── Profession
+--   ├── Traits
+--   ├── Skills
+--   └── MaxWeight
+--          ↓
+--   Characteristics
+--          ↓
+--   Behavioral Profile
+--          ↓
+--   Future:
+--   Role → Specialization → Equipment → Task → AI
+------------------------------------------------------------
+
 BAO = BAO or {}
 BAO.PlayerProfile = BAO.PlayerProfile or {}
 
-local Profile = BAO.PlayerProfile
+local PlayerProfile = BAO.PlayerProfile
 
-Profile.Version = 1
+------------------------------------------------------------
+-- DEBUG / LOGGING
+------------------------------------------------------------
 
 local function Log(message)
     print("[BAO][PlayerProfile] " .. tostring(message))
 end
 
+local function Warning(message)
+    print("[BAO][PlayerProfile][WARNING] " .. tostring(message))
+end
+
+local function Error(message)
+    print("[BAO][PlayerProfile][ERROR] " .. tostring(message))
+end
 
 ------------------------------------------------------------
--- Настройки
+-- SAFE CALL
+--
+-- Позволяет безопасно обращаться к API B42.
+-- Если вызов вызывает ошибку или возвращает nil,
+-- возвращается defaultValue.
 ------------------------------------------------------------
 
-local SkillNames = {
-    "Aiming",
-    "Fitness",
-    "Strength",
-    "Cooking",
-    "Farming",
-    "FirstAid",
-    "Mechanics",
-    "MetalWelding",
-    "Carpentry",
-    "Woodwork",
-    "Electrical",
-    "Tailoring",
-    "Reloading",
-    "Maintenance"
-}
+local function SafeCall(callback, defaultValue)
+    local success, result = pcall(callback)
 
+    if success then
+        if result ~= nil then
+            return result
+        end
+    end
+
+    return defaultValue
+end
 
 ------------------------------------------------------------
--- Создание пустого профиля
+-- CLAMP
 ------------------------------------------------------------
 
-function Profile.CreateEmpty()
-    local profile = {
-        Version = Profile.Version,
+local function Clamp(value, minimum, maximum)
+    value = tonumber(value) or 0
 
-        Profession = nil,
+    if value < minimum then
+        return minimum
+    end
 
-        Traits = {},
+    if value > maximum then
+        return maximum
+    end
 
-        Skills = {},
+    return value
+end
 
-        MaxWeight = nil
+------------------------------------------------------------
+-- GET PLAYER
+------------------------------------------------------------
+
+local function GetPlayer()
+    return SafeCall(function()
+        return getPlayer()
+    end, nil)
+end
+
+------------------------------------------------------------
+-- GET USERNAME
+------------------------------------------------------------
+
+local function GetUsername(player)
+    if not player then
+        return "unknown"
+    end
+
+    return SafeCall(function()
+        return player:getUsername()
+    end, "unknown")
+end
+
+------------------------------------------------------------
+-- GET DISPLAY NAME
+------------------------------------------------------------
+
+local function GetDisplayName(player)
+    if not player then
+        return "unknown"
+    end
+
+    return SafeCall(function()
+        return player:getDisplayName()
+    end, GetUsername(player))
+end
+
+------------------------------------------------------------
+-- PROFESSION
+--
+-- B42:
+-- player:getDescriptor()
+--      ↓
+-- SurvivorDesc
+--      ↓
+-- getCharacterProfession()
+--      ↓
+-- CharacterProfession
+------------------------------------------------------------
+
+local function GetProfession(player)
+
+    local result = {
+        ID = "unknown",
+        Name = "Unknown",
+        String = "unknown"
     }
 
-    return profile
-end
+    if not player then
+        return result
+    end
 
-
-------------------------------------------------------------
--- Получение профессии
-------------------------------------------------------------
-
-local function ReadProfession(player, profile)
-
-    local successDescriptor, descriptor = pcall(function()
+    local descriptor = SafeCall(function()
         return player:getDescriptor()
-    end)
+    end, nil)
 
-    if not successDescriptor or descriptor == nil then
-        Log("Unable to read player descriptor")
-        return
+    if not descriptor then
+        Warning("Player descriptor unavailable")
+        return result
     end
 
-    local successProfession, profession = pcall(function()
+    local profession = SafeCall(function()
         return descriptor:getCharacterProfession()
-    end)
+    end, nil)
 
-    if not successProfession or profession == nil then
-        Log("Unable to read CharacterProfession")
-        return
+    if not profession then
+        Warning("CharacterProfession unavailable")
+        return result
     end
 
-    local successName, professionName = pcall(function()
+    local name = SafeCall(function()
         return profession:getName()
-    end)
+    end, nil)
 
-    if successName then
-        profile.Profession = tostring(professionName)
-        Log("Profession: " .. tostring(profile.Profession))
-    else
-        Log("Unable to read profession name")
+    local professionString = SafeCall(function()
+        return profession:toString()
+    end, nil)
+
+    if name then
+        result.ID = tostring(name)
+        result.Name = tostring(name)
     end
+
+    if professionString then
+        result.String = tostring(professionString)
+    else
+        result.String = result.ID
+    end
+
+    Log("Profession detected: " .. tostring(result.ID))
+
+    return result
 end
 
-
 ------------------------------------------------------------
--- Получение черт
+-- TRAITS
+--
+-- IMPORTANT:
+--
+-- player:getCharacterTraits()
+--      ↓
+-- CharacterTraits
+--
+-- characterTraits:getKnownTraits()
+--      ↓
+-- Java collection
+--
+-- НЕЛЬЗЯ:
+--
+-- for _, trait in pairs(knownTraits) do
+--
+-- Используем:
+--
+-- knownTraits:size()
+-- knownTraits:get(index)
+--
 ------------------------------------------------------------
 
-local function ReadTraits(player, profile)
+local function GetTraits(player)
 
-    local successTraitsObject, traitsObject = pcall(function()
+    local traits = {}
+
+    if not player then
+        return traits
+    end
+
+    local characterTraits = SafeCall(function()
         return player:getCharacterTraits()
-    end)
+    end, nil)
 
-    if not successTraitsObject or traitsObject == nil then
-        Log("Unable to read CharacterTraits")
-        return
+    if not characterTraits then
+        Warning("CharacterTraits unavailable")
+        return traits
     end
 
-    local successKnownTraits, knownTraits = pcall(function()
-        return traitsObject:getKnownTraits()
-    end)
+    local knownTraits = SafeCall(function()
+        return characterTraits:getKnownTraits()
+    end, nil)
 
-    if not successKnownTraits or knownTraits == nil then
-        Log("Unable to read known traits")
-        return
+    if not knownTraits then
+        Warning("KnownTraits collection unavailable")
+        return traits
     end
 
-    local successCount, count = pcall(function()
+    local count = SafeCall(function()
         return knownTraits:size()
-    end)
+    end, 0)
 
-    if not successCount or count == nil then
-        Log("Unable to read trait count")
-        return
+    count = tonumber(count) or 0
+
+    if count <= 0 then
+        Log("No active traits found")
+        return traits
     end
+
+    Log("Collecting active traits: " .. tostring(count))
 
     for i = 0, count - 1 do
 
-        local successTrait, trait = pcall(function()
+        local trait = SafeCall(function()
             return knownTraits:get(i)
-        end)
+        end, nil)
 
-        if successTrait and trait ~= nil then
+        if trait then
 
-            local successName, traitName = pcall(function()
+            local traitName = SafeCall(function()
                 return trait:getName()
-            end)
+            end, nil)
 
-            if successName and traitName ~= nil then
-                table.insert(
-                    profile.Traits,
-                    tostring(traitName)
-                )
+            if traitName then
+
+                traitName = tostring(traitName)
+
+                traits[traitName] = true
+
+                Log("Active trait: " .. traitName)
             end
         end
     end
 
-    Log("Traits count: " .. tostring(#profile.Traits))
+    Log("Active traits collected: " .. tostring(count))
+
+    return traits
 end
 
+------------------------------------------------------------
+-- TRAIT CHECK
+------------------------------------------------------------
+
+local function HasTrait(traits, traitName)
+
+    if not traits then
+        return false
+    end
+
+    return traits[traitName] == true
+end
 
 ------------------------------------------------------------
--- Получение навыков
+-- SKILL
+--
+-- player:getPerkLevel(Perks[skillName])
 ------------------------------------------------------------
 
-local function ReadSkills(player, profile)
+local function GetSkill(player, skillName)
 
-    for _, skillName in ipairs(SkillNames) do
+    if not player then
+        return 0
+    end
 
-        local successLevel, level = pcall(function()
-            return player:getPerkLevel(
-                Perks[skillName]
-            )
-        end)
+    local perk = SafeCall(function()
+        return Perks[skillName]
+    end, nil)
 
-        if successLevel and level ~= nil then
+    if not perk then
+        return 0
+    end
 
-            profile.Skills[skillName] = level
+    local level = SafeCall(function()
+        return player:getPerkLevel(perk)
+    end, 0)
 
-        else
+    return tonumber(level) or 0
+end
 
-            profile.Skills[skillName] = 0
+------------------------------------------------------------
+-- COLLECT SKILLS
+------------------------------------------------------------
 
+local function GetSkills(player)
+
+    local skills = {}
+
+    skills.Aiming = GetSkill(player, "Aiming")
+    skills.Reloading = GetSkill(player, "Reloading")
+    skills.Maintenance = GetSkill(player, "Maintenance")
+
+    skills.Fitness = GetSkill(player, "Fitness")
+    skills.Strength = GetSkill(player, "Strength")
+
+    skills.Cooking = GetSkill(player, "Cooking")
+    skills.Farming = GetSkill(player, "Farming")
+    skills.Fishing = GetSkill(player, "Fishing")
+
+    skills.FirstAid = GetSkill(player, "FirstAid")
+
+    skills.Mechanics = GetSkill(player, "Mechanics")
+    skills.Electrical = GetSkill(player, "Electrical")
+    skills.MetalWelding = GetSkill(player, "MetalWelding")
+
+    skills.Carpentry = GetSkill(player, "Carpentry")
+    skills.Woodwork = GetSkill(player, "Woodwork")
+
+    skills.Tailoring = GetSkill(player, "Tailoring")
+
+    return skills
+end
+
+------------------------------------------------------------
+-- MAX WEIGHT
+------------------------------------------------------------
+
+local function GetMaxWeight(player)
+
+    if not player then
+        return 0
+    end
+
+    return tonumber(
+        SafeCall(function()
+            return player:getMaxWeight()
+        end, 0)
+    ) or 0
+end
+
+------------------------------------------------------------
+-- CHARACTERISTICS
+--
+-- Все характеристики:
+-- 0 - 100
+--
+-- ВАЖНО:
+--
+-- Профессия здесь НЕ даёт прямой бонус.
+--
+-- Профессия будет использоваться позднее
+-- как professional affinity при выборе роли.
+--
+-- Это позволяет избежать:
+--
+-- mechanic = автоматически механик
+--
+-- вместо:
+--
+-- mechanic + traits + skills
+--      ↓
+-- technical ability
+--      ↓
+-- role scoring
+------------------------------------------------------------
+
+local function CalculateCharacteristics(skills, traits)
+
+    local s = skills or {}
+    local t = traits or {}
+
+    --------------------------------------------------------
+    -- Безопасное получение навыка
+    --------------------------------------------------------
+
+    local function Skill(skillName)
+
+        local value = s[skillName]
+
+        if value == nil then
+            return 0
         end
+
+        return tonumber(value) or 0
     end
 
-    Log("Skills collected")
-end
+    --------------------------------------------------------
+    -- PHYSICAL POWER
+    --------------------------------------------------------
 
+    local physicalPower =
+        Skill("Strength") * 10
 
-------------------------------------------------------------
--- Получение максимального веса
-------------------------------------------------------------
+    if HasTrait(t, "strong") then
+        physicalPower = physicalPower + 15
+    end
 
-local function ReadMaxWeight(player, profile)
+    if HasTrait(t, "stout") then
+        physicalPower = physicalPower + 8
+    end
 
-    local successWeight, maxWeight = pcall(function()
-        return player:getMaxWeight()
-    end)
+    if HasTrait(t, "weak") then
+        physicalPower = physicalPower - 15
+    end
 
-    if successWeight and maxWeight ~= nil then
+    if HasTrait(t, "feeble") then
+        physicalPower = physicalPower - 25
+    end
 
-        profile.MaxWeight = maxWeight
+    --------------------------------------------------------
+    -- ENDURANCE
+    --------------------------------------------------------
 
-        Log(
-            "Max weight: "
-            .. tostring(profile.MaxWeight)
+    local endurance =
+        Skill("Fitness") * 10
+
+    if HasTrait(t, "jogger") then
+        endurance = endurance + 10
+    end
+
+    if HasTrait(t, "athletic") then
+        endurance = endurance + 15
+    end
+
+    if HasTrait(t, "fit") then
+        endurance = endurance + 8
+    end
+
+    if HasTrait(t, "unfit") then
+        endurance = endurance - 15
+    end
+
+    if HasTrait(t, "out of shape") then
+        endurance = endurance - 20
+    end
+
+    --------------------------------------------------------
+    -- COMBAT POTENTIAL
+    --------------------------------------------------------
+
+    local combatPotential =
+        Skill("Aiming") * 5 +
+        Skill("Reloading") * 3 +
+        Skill("Maintenance") * 2 +
+        Skill("Strength") * 2 +
+        Skill("Fitness") * 2
+
+    if HasTrait(t, "brave") then
+        combatPotential = combatPotential + 8
+    end
+
+    if HasTrait(t, "brawler") then
+        combatPotential = combatPotential + 8
+    end
+
+    if HasTrait(t, "marksman") then
+        combatPotential = combatPotential + 10
+    end
+
+    if HasTrait(t, "pacifist") then
+        combatPotential = combatPotential - 15
+    end
+
+    --------------------------------------------------------
+    -- TECHNICAL ABILITY
+    --------------------------------------------------------
+
+    local technicalAbility =
+        Skill("Mechanics") * 8 +
+        Skill("Electrical") * 5 +
+        Skill("MetalWelding") * 5 +
+        Skill("Maintenance") * 4
+
+    if HasTrait(t, "inventive") then
+        technicalAbility = technicalAbility + 10
+    end
+
+    if HasTrait(t, "tinkerer") then
+        technicalAbility = technicalAbility + 10
+    end
+
+    if HasTrait(t, "handy") then
+        technicalAbility = technicalAbility + 8
+    end
+
+    --------------------------------------------------------
+    -- CONSTRUCTION ABILITY
+    --------------------------------------------------------
+
+    local constructionAbility =
+        Skill("Carpentry") * 8 +
+        Skill("Woodwork") * 8 +
+        Skill("MetalWelding") * 4
+
+    if HasTrait(t, "handy") then
+        constructionAbility = constructionAbility + 10
+    end
+
+    if HasTrait(t, "mason") then
+        constructionAbility = constructionAbility + 10
+    end
+
+    if HasTrait(t, "blacksmith") then
+        constructionAbility = constructionAbility + 5
+    end
+
+    --------------------------------------------------------
+    -- MEDICAL ABILITY
+    --------------------------------------------------------
+
+    local medicalAbility =
+        Skill("FirstAid") * 10
+
+    if HasTrait(t, "firstaid") then
+        medicalAbility = medicalAbility + 15
+    end
+
+    --------------------------------------------------------
+    -- SURVIVAL ABILITY
+    --------------------------------------------------------
+
+    local survivalAbility =
+        Skill("Farming") * 3 +
+        Skill("Cooking") * 3 +
+        Skill("Fishing") * 3 +
+        Skill("Fitness") * 2
+
+    if HasTrait(t, "outdoorsman") then
+        survivalAbility = survivalAbility + 15
+    end
+
+    if HasTrait(t, "hunter") then
+        survivalAbility = survivalAbility + 10
+    end
+
+    if HasTrait(t, "hiker") then
+        survivalAbility = survivalAbility + 8
+    end
+
+    if HasTrait(t, "wildernessknowledge") then
+        survivalAbility = survivalAbility + 10
+    end
+
+    --------------------------------------------------------
+    -- LOGISTICS ABILITY
+    --------------------------------------------------------
+
+    local logisticsAbility =
+        Skill("Strength") * 4 +
+        Skill("Maintenance") * 3 +
+        Skill("Mechanics") * 2
+
+    if HasTrait(t, "organized") then
+        logisticsAbility = logisticsAbility + 10
+    end
+
+    if HasTrait(t, "disorganized") then
+        logisticsAbility = logisticsAbility - 10
+    end
+
+    --------------------------------------------------------
+    -- RECON ABILITY
+    --------------------------------------------------------
+
+    local reconAbility =
+        Skill("Fitness") * 3 +
+        Skill("Aiming") * 2 +
+        Skill("Maintenance") * 2
+
+    if HasTrait(t, "keenhearing") then
+        reconAbility = reconAbility + 10
+    end
+
+    if HasTrait(t, "eagleeyed") then
+        reconAbility = reconAbility + 10
+    end
+
+    if HasTrait(t, "outdoorsman") then
+        reconAbility = reconAbility + 10
+    end
+
+    if HasTrait(t, "hiker") then
+        reconAbility = reconAbility + 8
+    end
+
+    --------------------------------------------------------
+    -- AGRICULTURE ABILITY
+    --------------------------------------------------------
+
+    local agricultureAbility =
+        Skill("Farming") * 10 +
+        Skill("Cooking") * 2
+
+    if HasTrait(t, "gardener") then
+        agricultureAbility = agricultureAbility + 15
+    end
+
+    --------------------------------------------------------
+    -- SECURITY ABILITY
+    --------------------------------------------------------
+
+    local securityAbility =
+        Skill("Aiming") * 5 +
+        Skill("Fitness") * 3 +
+        Skill("Strength") * 2
+
+    if HasTrait(t, "keenhearing") then
+        securityAbility = securityAbility + 10
+    end
+
+    if HasTrait(t, "eagleeyed") then
+        securityAbility = securityAbility + 10
+    end
+
+    if HasTrait(t, "brave") then
+        securityAbility = securityAbility + 8
+    end
+
+    --------------------------------------------------------
+    -- LEADERSHIP ABILITY
+    --------------------------------------------------------
+
+    local leadershipAbility =
+        Skill("Aiming") * 2 +
+        Skill("Fitness") * 2 +
+        Skill("Strength") * 2
+
+    if HasTrait(t, "brave") then
+        leadershipAbility = leadershipAbility + 10
+    end
+
+    if HasTrait(t, "desensitized") then
+        leadershipAbility = leadershipAbility + 5
+    end
+
+    --------------------------------------------------------
+    -- FINAL CHARACTERISTICS
+    --------------------------------------------------------
+
+    local characteristics = {
+
+        PhysicalPower = Clamp(
+            physicalPower,
+            0,
+            100
+        ),
+
+        Endurance = Clamp(
+            endurance,
+            0,
+            100
+        ),
+
+        CombatPotential = Clamp(
+            combatPotential,
+            0,
+            100
+        ),
+
+        TechnicalAbility = Clamp(
+            technicalAbility,
+            0,
+            100
+        ),
+
+        ConstructionAbility = Clamp(
+            constructionAbility,
+            0,
+            100
+        ),
+
+        MedicalAbility = Clamp(
+            medicalAbility,
+            0,
+            100
+        ),
+
+        SurvivalAbility = Clamp(
+            survivalAbility,
+            0,
+            100
+        ),
+
+        LogisticsAbility = Clamp(
+            logisticsAbility,
+            0,
+            100
+        ),
+
+        ReconAbility = Clamp(
+            reconAbility,
+            0,
+            100
+        ),
+
+        AgricultureAbility = Clamp(
+            agricultureAbility,
+            0,
+            100
+        ),
+
+        SecurityAbility = Clamp(
+            securityAbility,
+            0,
+            100
+        ),
+
+        LeadershipAbility = Clamp(
+            leadershipAbility,
+            0,
+            100
         )
+    }
 
-    else
-
-        Log("Unable to read max weight")
-    end
+    return characteristics
 end
 
+------------------------------------------------------------
+-- BEHAVIORAL PROFILE
+--
+-- Это НЕ характеристики.
+--
+-- Характеристики:
+-- "насколько способен"
+--
+-- Поведение:
+-- "как действует"
+------------------------------------------------------------
+
+local function CalculateBehavior(characteristics, traits)
+
+    local t = traits or {}
+    local c = characteristics or {}
+
+    --------------------------------------------------------
+    -- BASE VALUES
+    --------------------------------------------------------
+
+    local aggression = 50
+    local courage = 50
+    local discipline = 50
+    local curiosity = 50
+
+    --------------------------------------------------------
+    -- AGGRESSION
+    --------------------------------------------------------
+
+    if HasTrait(t, "brawler") then
+        aggression = aggression + 15
+    end
+
+    if HasTrait(t, "brave") then
+        aggression = aggression + 8
+    end
+
+    if HasTrait(t, "pacifist") then
+        aggression = aggression - 25
+    end
+
+    --------------------------------------------------------
+    -- COURAGE
+    --------------------------------------------------------
+
+    if HasTrait(t, "brave") then
+        courage = courage + 25
+    end
+
+    if HasTrait(t, "cowardly") then
+        courage = courage - 30
+    end
+
+    if HasTrait(t, "desensitized") then
+        courage = courage + 10
+    end
+
+    --------------------------------------------------------
+    -- DISCIPLINE
+    --------------------------------------------------------
+
+    if HasTrait(t, "organized") then
+        discipline = discipline + 15
+    end
+
+    if HasTrait(t, "disorganized") then
+        discipline = discipline - 15
+    end
+
+    --------------------------------------------------------
+    -- CURIOSITY
+    --------------------------------------------------------
+
+    if HasTrait(t, "inventive") then
+        curiosity = curiosity + 10
+    end
+
+    if HasTrait(t, "outdoorsman") then
+        curiosity = curiosity + 8
+    end
+
+    --------------------------------------------------------
+    -- CLAMP BASIC VALUES
+    --------------------------------------------------------
+
+    aggression = Clamp(
+        aggression,
+        0,
+        100
+    )
+
+    courage = Clamp(
+        courage,
+        0,
+        100
+    )
+
+    discipline = Clamp(
+        discipline,
+        0,
+        100
+    )
+
+    curiosity = Clamp(
+        curiosity,
+        0,
+        100
+    )
+
+    --------------------------------------------------------
+    -- FEAR
+    --------------------------------------------------------
+
+    local fear = 100 - courage
+
+    --------------------------------------------------------
+    -- LOYALTY
+    --
+    -- Пока базовое значение.
+    --
+    -- Позже сюда подключим:
+    -- faction loyalty
+    -- squad loyalty
+    -- commander relationship
+    -- personal relationships
+    --------------------------------------------------------
+
+    local loyalty = 50
+
+    --------------------------------------------------------
+    -- RISK TOLERANCE
+    --------------------------------------------------------
+
+    local riskTolerance =
+        40 +
+        aggression * 0.25 +
+        courage * 0.25
+
+    --------------------------------------------------------
+    -- PLAYER HOSTILITY
+    --------------------------------------------------------
+
+    local playerHostility = 50
+
+    if (c.CombatPotential or 0) >= 60 then
+        playerHostility = playerHostility + 10
+    end
+
+    if HasTrait(t, "pacifist") then
+        playerHostility = playerHostility - 20
+    end
+
+    --------------------------------------------------------
+    -- FINAL BEHAVIOR
+    --------------------------------------------------------
+
+    local behavior = {
+
+        Aggression = Clamp(
+            aggression,
+            0,
+            100
+        ),
+
+        Courage = Clamp(
+            courage,
+            0,
+            100
+        ),
+
+        Fear = Clamp(
+            fear,
+            0,
+            100
+        ),
+
+        Discipline = Clamp(
+            discipline,
+            0,
+            100
+        ),
+
+        Loyalty = Clamp(
+            loyalty,
+            0,
+            100
+        ),
+
+        RiskTolerance = Clamp(
+            riskTolerance,
+            0,
+            100
+        ),
+
+        Curiosity = Clamp(
+            curiosity,
+            0,
+            100
+        ),
+
+        PlayerHostility = Clamp(
+            playerHostility,
+            0,
+            100
+        )
+    }
+
+    return behavior
+end
 
 ------------------------------------------------------------
--- Создание профиля игрока
+-- CREATE PROFILE
 ------------------------------------------------------------
 
-function Profile.FromPlayer(player)
+function PlayerProfile.Create(player)
 
-    if player == nil then
-        Log("ERROR: player is nil")
+    if not player then
+        Error("Cannot create profile: player is nil")
         return nil
     end
 
-    Log("Creating player profile")
+    Log("Creating Player Profile V2")
 
-    local profile = Profile.CreateEmpty()
+    --------------------------------------------------------
+    -- BASIC DATA
+    --------------------------------------------------------
 
-    ReadProfession(
-        player,
-        profile
+    local username = GetUsername(player)
+    local displayName = GetDisplayName(player)
+
+    --------------------------------------------------------
+    -- RAW DATA
+    --------------------------------------------------------
+
+    local profession = GetProfession(player)
+    local traits = GetTraits(player)
+    local skills = GetSkills(player)
+    local maxWeight = GetMaxWeight(player)
+
+    --------------------------------------------------------
+    -- CHARACTERISTICS
+    --------------------------------------------------------
+
+    local characteristics =
+        CalculateCharacteristics(
+            skills,
+            traits
+        )
+
+    --------------------------------------------------------
+    -- BEHAVIOR
+    --------------------------------------------------------
+
+    local behavior =
+        CalculateBehavior(
+            characteristics,
+            traits
+        )
+
+    --------------------------------------------------------
+    -- PROFILE
+    --------------------------------------------------------
+
+    local profile = {
+
+        Version = 2,
+
+        Username = username,
+
+        DisplayName = displayName,
+
+        Profession = profession,
+
+        Traits = traits,
+
+        Skills = skills,
+
+        MaxWeight = maxWeight,
+
+        Characteristics = characteristics,
+
+        Behavior = behavior,
+
+        ----------------------------------------------------
+        -- FUTURE SYSTEMS
+        ----------------------------------------------------
+
+        Role = nil,
+
+        Specialization = nil,
+
+        EquipmentProfile = nil,
+
+        CurrentTask = nil,
+
+        SquadID = nil,
+
+        FactionID = nil,
+
+        ----------------------------------------------------
+        -- FUTURE MEMORY SYSTEM
+        ----------------------------------------------------
+
+        Memory = {},
+
+        Relationships = {},
+
+        ThreatAssessment = {}
+    }
+
+    --------------------------------------------------------
+    -- LOG PROFILE
+    --------------------------------------------------------
+
+    Log("----------------------------------------")
+    Log("PLAYER PROFILE V2 CREATED")
+    Log("----------------------------------------")
+
+    Log(
+        "Username: " ..
+        tostring(profile.Username)
     )
 
-    ReadTraits(
-        player,
-        profile
+    Log(
+        "DisplayName: " ..
+        tostring(profile.DisplayName)
     )
 
-    ReadSkills(
-        player,
-        profile
+    Log(
+        "Profession: " ..
+        tostring(profile.Profession.ID)
     )
 
-    ReadMaxWeight(
-        player,
-        profile
+    Log(
+        "MaxWeight: " ..
+        tostring(profile.MaxWeight)
     )
 
-    Log("Player profile created")
+    --------------------------------------------------------
+    -- CHARACTERISTICS LOG
+    --------------------------------------------------------
+
+    Log("Characteristics:")
+
+    for name, value in pairs(profile.Characteristics) do
+
+        Log(
+            "  " ..
+            tostring(name) ..
+            " = " ..
+            tostring(value)
+        )
+    end
+
+    --------------------------------------------------------
+    -- BEHAVIOR LOG
+    --------------------------------------------------------
+
+    Log("Behavior:")
+
+    for name, value in pairs(profile.Behavior) do
+
+        Log(
+            "  " ..
+            tostring(name) ..
+            " = " ..
+            tostring(value)
+        )
+    end
+
+    --------------------------------------------------------
+    -- STORE
+    --------------------------------------------------------
+
+    PlayerProfile.Current = profile
+
+    Log("----------------------------------------")
+    Log("Player Profile V2 initialization complete")
+    Log("----------------------------------------")
 
     return profile
 end
 
+------------------------------------------------------------
+-- GET CURRENT PROFILE
+------------------------------------------------------------
+
+function PlayerProfile.Get()
+
+    return PlayerProfile.Current
+end
 
 ------------------------------------------------------------
--- Вывод профиля в консоль
+-- GET CHARACTERISTIC
 ------------------------------------------------------------
 
-function Profile.Print(profile)
+function PlayerProfile.GetCharacteristic(name)
 
-    if profile == nil then
-        Log("Cannot print nil profile")
+    local profile = PlayerProfile.Current
+
+    if not profile then
+        return nil
+    end
+
+    if not profile.Characteristics then
+        return nil
+    end
+
+    return profile.Characteristics[name]
+end
+
+------------------------------------------------------------
+-- GET BEHAVIOR VALUE
+------------------------------------------------------------
+
+function PlayerProfile.GetBehavior(name)
+
+    local profile = PlayerProfile.Current
+
+    if not profile then
+        return nil
+    end
+
+    if not profile.Behavior then
+        return nil
+    end
+
+    return profile.Behavior[name]
+end
+
+------------------------------------------------------------
+-- GET TRAIT
+------------------------------------------------------------
+
+function PlayerProfile.HasTrait(traitName)
+
+    local profile = PlayerProfile.Current
+
+    if not profile then
+        return false
+    end
+
+    return HasTrait(
+        profile.Traits,
+        traitName
+    )
+end
+
+------------------------------------------------------------
+-- GET SKILL
+------------------------------------------------------------
+
+function PlayerProfile.GetSkill(skillName)
+
+    local profile = PlayerProfile.Current
+
+    if not profile then
+        return 0
+    end
+
+    if not profile.Skills then
+        return 0
+    end
+
+    return profile.Skills[skillName] or 0
+end
+
+------------------------------------------------------------
+-- PRINT PROFILE
+--
+-- Удобная функция для будущего админ-HUD.
+------------------------------------------------------------
+
+function PlayerProfile.PrintProfile()
+
+    local profile = PlayerProfile.Current
+
+    if not profile then
+        Warning("No current player profile")
         return
     end
 
     Log("========================================")
-    Log("PLAYER PROFILE")
+    Log("CURRENT PLAYER PROFILE")
     Log("========================================")
 
     Log(
-        "Version: "
-        .. tostring(profile.Version)
+        "Username: " ..
+        tostring(profile.Username)
     )
 
     Log(
-        "Profession: "
-        .. tostring(profile.Profession)
+        "Profession: " ..
+        tostring(profile.Profession.ID)
     )
 
-    Log(
-        "MaxWeight: "
-        .. tostring(profile.MaxWeight)
-    )
-
-
-    --------------------------------------------------------
-    -- Traits
-    --------------------------------------------------------
+    Log("")
 
     Log("Traits:")
 
-    if #profile.Traits == 0 then
+    for traitName, active in pairs(profile.Traits) do
 
-        Log("  none")
-
-    else
-
-        for index, traitName in ipairs(profile.Traits) do
-
+        if active then
             Log(
-                "  "
-                .. tostring(index)
-                .. ": "
-                .. tostring(traitName)
+                "  " ..
+                tostring(traitName)
             )
-
         end
     end
 
-
-    --------------------------------------------------------
-    -- Skills
-    --------------------------------------------------------
+    Log("")
 
     Log("Skills:")
 
-    for _, skillName in ipairs(SkillNames) do
+    for skillName, level in pairs(profile.Skills) do
 
         Log(
-            "  "
-            .. tostring(skillName)
-            .. ": "
-            .. tostring(profile.Skills[skillName])
+            "  " ..
+            tostring(skillName) ..
+            " = " ..
+            tostring(level)
         )
+    end
 
+    Log("")
+
+    Log("Characteristics:")
+
+    for name, value in pairs(profile.Characteristics) do
+
+        Log(
+            "  " ..
+            tostring(name) ..
+            " = " ..
+            tostring(value)
+        )
+    end
+
+    Log("")
+
+    Log("Behavior:")
+
+    for name, value in pairs(profile.Behavior) do
+
+        Log(
+            "  " ..
+            tostring(name) ..
+            " = " ..
+            tostring(value)
+        )
     end
 
     Log("========================================")
 end
 
-
 ------------------------------------------------------------
--- Тест профиля
+-- GAME START
 ------------------------------------------------------------
 
-local function TestPlayerProfile()
+local function OnGameStart()
 
-    Log("PlayerProfile test started")
+    Log("OnGameStart event received")
 
-    local successPlayer, player = pcall(function()
-        return getPlayer()
-    end)
+    local player = GetPlayer()
 
-    if not successPlayer or player == nil then
-        Log("Player not available yet")
+    if not player then
+        Error("Player unavailable during OnGameStart")
         return
     end
 
-    local profile = Profile.FromPlayer(player)
-
-    if profile == nil then
-        Log("ERROR: profile creation failed")
-        return
-    end
-
-    Profile.Print(profile)
-
-    Log("PlayerProfile test finished")
+    PlayerProfile.Create(player)
 end
 
+------------------------------------------------------------
+-- PLAYER CREATED
+--
+-- В мультиплеере игрок может создаваться отдельно
+-- от OnGameStart, поэтому здесь профиль тоже
+-- можно пересоздать.
+------------------------------------------------------------
+
+local function OnCreatePlayer(playerIndex, player)
+
+    Log("OnCreatePlayer event received")
+
+    if not player then
+        Warning("OnCreatePlayer received nil player")
+        return
+    end
+
+    local username = GetUsername(player)
+
+    Log(
+        "Creating profile for player: " ..
+        tostring(username)
+    )
+
+    PlayerProfile.Create(player)
+end
 
 ------------------------------------------------------------
--- Подключение к OnGameStart
+-- EVENT REGISTRATION
 ------------------------------------------------------------
 
-if Events and Events.OnGameStart then
+if Events then
 
-    Events.OnGameStart.Add(function()
+    if Events.OnGameStart then
 
-        Log("OnGameStart event received")
+        Events.OnGameStart.Add(
+            OnGameStart
+        )
 
-        TestPlayerProfile()
+        Log("OnGameStart handler registered")
 
-    end)
+    else
 
-    Log("OnGameStart handler registered")
+        Warning("Events.OnGameStart unavailable")
+
+    end
+
+    if Events.OnCreatePlayer then
+
+        Events.OnCreatePlayer.Add(
+            OnCreatePlayer
+        )
+
+        Log("OnCreatePlayer handler registered")
+
+    else
+
+        Warning("Events.OnCreatePlayer unavailable")
+
+    end
 
 else
 
-    Log(
-        "WARNING: OnGameStart event is not available"
-    )
-
+    Error("Events object unavailable")
 end
 
-
 ------------------------------------------------------------
--- Module loaded
-------------------------------------------------------------i
+-- MODULE LOADED
+------------------------------------------------------------
 
-Log("PlayerProfile module loaded")
+Log("Player Profile V2 module loaded")
