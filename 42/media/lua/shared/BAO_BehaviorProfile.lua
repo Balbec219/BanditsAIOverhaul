@@ -638,15 +638,49 @@ end
 ------------------------------------------------------------
 
 function BehaviorProfile.Get(profile)
-    if not profile then
+
+    --------------------------------------------------------
+    -- If profile was provided explicitly,
+    -- use it.
+    --------------------------------------------------------
+
+    if profile then
+        return profile.BehaviorProfile
+    end
+
+    --------------------------------------------------------
+    -- Otherwise automatically get the current
+    -- PlayerProfile.
+    --
+    -- This allows other BAO systems to simply call:
+    --
+    -- BAO.BehaviorProfile.Get()
+    --
+    --------------------------------------------------------
+
+    if not BAO.PlayerProfile then
         return nil
     end
 
-    return profile.BehaviorProfile
+    if not BAO.PlayerProfile.Get then
+        return nil
+    end
+
+    local currentProfile =
+        BAO.PlayerProfile.Get()
+
+    if not currentProfile then
+        return nil
+    end
+
+    return currentProfile.BehaviorProfile
 end
 
+
 function BehaviorProfile.GetPersonality(profile)
-    local behavior = BehaviorProfile.Get(profile)
+
+    local behavior =
+        BehaviorProfile.Get(profile)
 
     if not behavior then
         return nil
@@ -655,8 +689,11 @@ function BehaviorProfile.GetPersonality(profile)
     return behavior.Personality
 end
 
+
 function BehaviorProfile.GetCapabilities(profile)
-    local behavior = BehaviorProfile.Get(profile)
+
+    local behavior =
+        BehaviorProfile.Get(profile)
 
     if not behavior then
         return nil
@@ -665,8 +702,11 @@ function BehaviorProfile.GetCapabilities(profile)
     return behavior.Capabilities
 end
 
+
 function BehaviorProfile.GetTendencies(profile)
-    local behavior = BehaviorProfile.Get(profile)
+
+    local behavior =
+        BehaviorProfile.Get(profile)
 
     if not behavior then
         return nil

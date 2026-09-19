@@ -5,40 +5,11 @@ BAO.DecisionSystem = BAO.DecisionSystem or {}
 
 --------------------------------------------------
 -- BAO Decision System V1
--- High-level decision making
---
--- This module does NOT execute actions.
--- It only decides what the character SHOULD want to do.
---
--- Pipeline:
--- PlayerProfile
---      ↓
--- RoleScoring
---      ↓
--- Specialization
---      ↓
--- BehaviorProfile
---      ↓
--- DecisionSystem
---      ↓
--- ActionSelection (future)
---      ↓
--- NPC Actions (future)
---------------------------------------------------
-
-
---------------------------------------------------
--- LOG
 --------------------------------------------------
 
 local function Log(message)
     print("[BAO] " .. tostring(message))
 end
-
-
---------------------------------------------------
--- UTILITY FUNCTIONS
---------------------------------------------------
 
 local function Clamp(value, minValue, maxValue)
     value = tonumber(value) or 0
@@ -54,7 +25,6 @@ local function Clamp(value, minValue, maxValue)
     return value
 end
 
-
 local function Round(value, decimals)
     value = tonumber(value) or 0
     decimals = decimals or 2
@@ -64,8 +34,8 @@ local function Round(value, decimals)
     return math.floor(value * multiplier + 0.5) / multiplier
 end
 
-
 local function GetTableValue(tbl, key, defaultValue)
+
     if type(tbl) ~= "table" then
         return defaultValue
     end
@@ -81,7 +51,7 @@ end
 
 
 --------------------------------------------------
--- DECISION DEFINITIONS
+-- DECISIONS
 --------------------------------------------------
 
 BAO.DecisionSystem.Decisions = {
@@ -98,11 +68,8 @@ BAO.DecisionSystem.Decisions = {
 
 
 --------------------------------------------------
--- DECISION PRIORITIES
+-- PRIORITIES
 --------------------------------------------------
-
--- Higher priority means the decision is more important
--- when two decisions have similar scores.
 
 BAO.DecisionSystem.Priority = {
     heal = 100,
@@ -118,12 +85,13 @@ BAO.DecisionSystem.Priority = {
 
 
 --------------------------------------------------
--- CURRENT DECISION DATA
+-- STATE
 --------------------------------------------------
 
 BAO.DecisionSystem.CurrentDecision = nil
 BAO.DecisionSystem.LastScores = nil
 BAO.DecisionSystem.Initialized = false
+BAO.DecisionSystem.InitializationAttempts = 0
 
 
 --------------------------------------------------
@@ -145,7 +113,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE PATROL SCORE
+-- PATROL
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculatePatrolScore(profile)
@@ -176,7 +144,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE EXPLORE SCORE
+-- EXPLORE
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateExploreScore(profile)
@@ -216,7 +184,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE RESOURCE GATHERING SCORE
+-- GATHER RESOURCES
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateGatherResourcesScore(profile)
@@ -251,7 +219,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE GUARD SCORE
+-- GUARD
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateGuardScore(profile)
@@ -287,7 +255,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE HELP ALLY SCORE
+-- HELP ALLY
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateHelpAllyScore(profile)
@@ -323,7 +291,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE REST SCORE
+-- REST
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateRestScore(profile)
@@ -351,7 +319,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE HEAL SCORE
+-- HEAL
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateHealScore(profile)
@@ -379,7 +347,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE RETREAT SCORE
+-- RETREAT
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateRetreatScore(profile)
@@ -415,7 +383,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE COMBAT SCORE
+-- COMBAT
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateCombatScore(profile)
@@ -451,7 +419,7 @@ end
 
 
 --------------------------------------------------
--- CALCULATE ALL DECISIONS
+-- CALCULATE ALL SCORES
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateScores(profile)
@@ -494,7 +462,7 @@ end
 
 
 --------------------------------------------------
--- FIND BEST DECISION
+-- SELECT BEST
 --------------------------------------------------
 
 function BAO.DecisionSystem.SelectBestDecision(scores)
@@ -541,125 +509,97 @@ end
 function BAO.DecisionSystem.PrintScores(scores)
 
     if not scores then
-        Log("Decision scores are unavailable")
+        Log("Decision scores unavailable")
         return
     end
 
     Log("=== DECISION SCORES ===")
 
-    Log(
-        "patrol = " ..
-        Round(scores.patrol)
-    )
-
-    Log(
-        "explore = " ..
-        Round(scores.explore)
-    )
-
-    Log(
-        "gather_resources = " ..
-        Round(scores.gather_resources)
-    )
-
-    Log(
-        "guard = " ..
-        Round(scores.guard)
-    )
-
-    Log(
-        "help_ally = " ..
-        Round(scores.help_ally)
-    )
-
-    Log(
-        "rest = " ..
-        Round(scores.rest)
-    )
-
-    Log(
-        "heal = " ..
-        Round(scores.heal)
-    )
-
-    Log(
-        "retreat = " ..
-        Round(scores.retreat)
-    )
-
-    Log(
-        "combat = " ..
-        Round(scores.combat)
-    )
+    Log("patrol = " .. Round(scores.patrol))
+    Log("explore = " .. Round(scores.explore))
+    Log("gather_resources = " .. Round(scores.gather_resources))
+    Log("guard = " .. Round(scores.guard))
+    Log("help_ally = " .. Round(scores.help_ally))
+    Log("rest = " .. Round(scores.rest))
+    Log("heal = " .. Round(scores.heal))
+    Log("retreat = " .. Round(scores.retreat))
+    Log("combat = " .. Round(scores.combat))
 end
 
 
 --------------------------------------------------
--- PRINT CURRENT DECISION
+-- PRINT DECISION
 --------------------------------------------------
 
 function BAO.DecisionSystem.PrintDecision(result)
 
     if not result then
-        Log("No decision was selected")
+        Log("No decision selected")
         return
     end
 
     Log("=== PRIMARY DECISION ===")
-
-    Log(
-        "Decision: " ..
-        tostring(result.Decision)
-    )
-
-    Log(
-        "Score: " ..
-        Round(result.Score)
-    )
-
-    Log(
-        "Priority: " ..
-        tostring(result.Priority)
-    )
+    Log("Decision: " .. tostring(result.Decision))
+    Log("Score: " .. Round(result.Score))
+    Log("Priority: " .. tostring(result.Priority))
 end
 
 
 --------------------------------------------------
--- CALCULATE CURRENT PLAYER DECISION
+-- CALCULATE CURRENT PLAYER
 --------------------------------------------------
 
 function BAO.DecisionSystem.CalculateCurrentPlayer()
 
+    Log("Decision System: CalculateCurrentPlayer started")
+
     if not BAO.PlayerProfile then
-        Log("ERROR: BAO.PlayerProfile is unavailable")
+        Log("DEBUG: BAO.PlayerProfile = NIL")
         return nil
     end
+
+    Log("DEBUG: BAO.PlayerProfile exists")
 
     if not BAO.PlayerProfile.Get then
-        Log("ERROR: BAO.PlayerProfile.Get is unavailable")
+        Log("DEBUG: BAO.PlayerProfile.Get = NIL")
         return nil
     end
 
-    local profile =
+    Log("DEBUG: BAO.PlayerProfile.Get exists")
+
+    local playerProfile =
         BAO.PlayerProfile.Get()
 
-    if not profile then
-        Log("Decision System: PlayerProfile not ready")
+    if not playerProfile then
+        Log("DEBUG: PlayerProfile.Get() returned NIL")
         return nil
     end
+
+    Log("DEBUG: PlayerProfile is ready")
 
     if not BAO.BehaviorProfile then
-        Log("ERROR: BAO.BehaviorProfile is unavailable")
+        Log("DEBUG: BAO.BehaviorProfile = NIL")
         return nil
     end
+
+    Log("DEBUG: BAO.BehaviorProfile exists")
+
+    if not BAO.BehaviorProfile.Get then
+        Log("DEBUG: BAO.BehaviorProfile.Get = NIL")
+        return nil
+    end
+
+    Log("DEBUG: BAO.BehaviorProfile.Get exists")
 
     local behaviorProfile =
-        BAO.DecisionSystem.GetBehaviorProfile()
+        BAO.BehaviorProfile.Get()
 
     if not behaviorProfile then
-        Log("Decision System: BehaviorProfile not ready")
+        Log("DEBUG: BehaviorProfile.Get() returned NIL")
         return nil
     end
+
+    Log("DEBUG: BehaviorProfile is ready")
 
     local scores =
         BAO.DecisionSystem.CalculateScores(
@@ -667,9 +607,11 @@ function BAO.DecisionSystem.CalculateCurrentPlayer()
         )
 
     if not scores then
-        Log("ERROR: Failed to calculate decision scores")
+        Log("DEBUG: CalculateScores returned NIL")
         return nil
     end
+
+    Log("DEBUG: Decision scores calculated")
 
     local result =
         BAO.DecisionSystem.SelectBestDecision(
@@ -677,9 +619,11 @@ function BAO.DecisionSystem.CalculateCurrentPlayer()
         )
 
     if not result then
-        Log("ERROR: Failed to select decision")
+        Log("DEBUG: SelectBestDecision returned NIL")
         return nil
     end
+
+    Log("DEBUG: Best decision selected")
 
     BAO.DecisionSystem.LastScores = scores
     BAO.DecisionSystem.CurrentDecision = result
@@ -689,7 +633,7 @@ end
 
 
 --------------------------------------------------
--- PRINT FULL DIAGNOSTIC
+-- FULL DIAGNOSTIC
 --------------------------------------------------
 
 function BAO.DecisionSystem.PrintCurrent()
@@ -730,31 +674,63 @@ function BAO.DecisionSystem.TryInitialize()
         return true
     end
 
+    BAO.DecisionSystem.InitializationAttempts =
+        BAO.DecisionSystem.InitializationAttempts + 1
+
+    Log(
+        "DEBUG: TryInitialize attempt " ..
+        tostring(
+            BAO.DecisionSystem.InitializationAttempts
+        )
+    )
+
     if not BAO.PlayerProfile then
+        Log("DEBUG INIT: BAO.PlayerProfile = NIL")
         return false
     end
+
+    Log("DEBUG INIT: PlayerProfile exists")
 
     if not BAO.PlayerProfile.Get then
+        Log("DEBUG INIT: PlayerProfile.Get = NIL")
         return false
     end
 
-    local profile =
+    Log("DEBUG INIT: PlayerProfile.Get exists")
+
+    local playerProfile =
         BAO.PlayerProfile.Get()
 
-    if not profile then
+    if not playerProfile then
+        Log("DEBUG INIT: PlayerProfile.Get() = NIL")
         return false
     end
 
+    Log("DEBUG INIT: PlayerProfile ready")
+
     if not BAO.BehaviorProfile then
+        Log("DEBUG INIT: BehaviorProfile = NIL")
         return false
     end
+
+    Log("DEBUG INIT: BehaviorProfile exists")
+
+    if not BAO.BehaviorProfile.Get then
+        Log("DEBUG INIT: BehaviorProfile.Get = NIL")
+        return false
+    end
+
+    Log("DEBUG INIT: BehaviorProfile.Get exists")
 
     local behaviorProfile =
         BAO.DecisionSystem.GetBehaviorProfile()
 
     if not behaviorProfile then
+        Log("DEBUG INIT: BehaviorProfile.Get() = NIL")
         return false
     end
+
+    Log("DEBUG INIT: BehaviorProfile ready")
 
     BAO.DecisionSystem.Initialized = true
 
