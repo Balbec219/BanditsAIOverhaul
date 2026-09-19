@@ -685,7 +685,12 @@ function BehaviorProfile.CalculateCurrentPlayer()
         return nil
     end
 
-    local profile = BAO.PlayerProfile.GetCurrent()
+    --------------------------------------------------------
+    -- IMPORTANT:
+    -- PlayerProfile API uses Get(), not GetCurrent().
+    --------------------------------------------------------
+
+    local profile = BAO.PlayerProfile.Get()
 
     if not profile then
         Log("Current player profile not available")
@@ -705,7 +710,12 @@ function BehaviorProfile.PrintCurrent()
         return
     end
 
-    local profile = BAO.PlayerProfile.GetCurrent()
+    --------------------------------------------------------
+    -- IMPORTANT:
+    -- PlayerProfile API uses Get(), not GetCurrent().
+    --------------------------------------------------------
+
+    local profile = BAO.PlayerProfile.Get()
 
     if not profile then
         Log("Current player profile not available")
@@ -749,7 +759,6 @@ end
 ------------------------------------------------------------
 
 local initializationAttempts = 0
-local maxInitializationAttempts = 300
 local initialized = false
 
 function BehaviorProfile.TryInitialize()
@@ -763,7 +772,12 @@ function BehaviorProfile.TryInitialize()
         return
     end
 
-    local profile = BAO.PlayerProfile.GetCurrent()
+    --------------------------------------------------------
+    -- IMPORTANT:
+    -- PlayerProfile API uses Get(), not GetCurrent().
+    --------------------------------------------------------
+
+    local profile = BAO.PlayerProfile.Get()
 
     if not profile then
         return
