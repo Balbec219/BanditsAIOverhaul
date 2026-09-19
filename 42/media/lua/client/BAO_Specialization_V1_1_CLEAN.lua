@@ -1553,10 +1553,23 @@ function Specialization.Calculate(profile, roleName)
         Role = roleName,
         Specializations = results,
         Primary = results[1],
-        Secondary = results[2]
+        Secondary = results[2],
+
+        -- Естественная специализация NPC.
+        -- Эти значения описывают врождённую пригодность персонажа
+        -- и позже не будут напрямую зависеть от текущего задания.
+        NaturalRole = roleName,
+        NaturalSpecialization = results[1],
+        SecondarySpecialization = results[2]
     }
 
     profile.SpecializationScoring = result
+
+    -- Дублируем основные значения в профиле для удобного доступа
+    -- другим системам BAO без необходимости разбирать результат скоринга.
+    profile.NaturalRole = roleName
+    profile.NaturalSpecialization = results[1]
+    profile.SecondarySpecialization = results[2]
 
 
     return result
@@ -1627,6 +1640,161 @@ function Specialization.CalculateFromProfile(profile)
         profile,
         primaryRole
     )
+end
+
+
+------------------------------------------------------------
+-- CURRENT PLAYER
+------------------------------------------------------------
+
+function Specialization.GetPrimary(profile)
+
+    if not profile then
+        return nil
+    end
+
+    local result = profile.SpecializationScoring
+
+    if not result then
+        return nil
+    end
+
+    return result.Primary
+end
+
+
+function Specialization.GetSecondary(profile)
+
+    if not profile then
+        return nil
+    end
+
+    local result = profile.SpecializationScoring
+
+    if not result then
+        return nil
+    end
+
+    return result.Secondary
+end
+
+
+function Specialization.GetNaturalRole(profile)
+
+    if not profile then
+        return nil
+    end
+
+    if profile.NaturalRole then
+        return profile.NaturalRole
+    end
+
+    local result = profile.SpecializationScoring
+
+    if result and result.NaturalRole then
+        return result.NaturalRole
+    end
+
+    return result and result.Role or nil
+end
+
+
+function Specialization.GetNaturalSpecialization(profile)
+
+    if not profile then
+        return nil
+    end
+
+    if profile.NaturalSpecialization then
+        return profile.NaturalSpecialization
+    end
+
+    local result = profile.SpecializationScoring
+
+    if result and result.NaturalSpecialization then
+        return result.NaturalSpecialization
+    end
+
+    return result and result.Primary or nil
+end
+
+
+function Specialization.GetSecondarySpecialization(profile)
+
+    if not profile then
+        return nil
+    end
+
+    if profile.SecondarySpecialization then
+        return profile.SecondarySpecialization
+    end
+
+    local result = profile.SpecializationScoring
+
+    if result and result.SecondarySpecialization then
+        return result.SecondarySpecialization
+    end
+
+    return result and result.Secondary or nil
+end
+
+
+function Specialization.PrintNaturalProfile(profile)
+
+    if not profile then
+        Log("ERROR: Profile not found")
+        return
+    end
+
+    local naturalRole =
+        Specialization.GetNaturalRole(profile)
+
+    local naturalSpecialization =
+        Specialization.GetNaturalSpecialization(profile)
+
+    local secondarySpecialization =
+        Specialization.GetSecondarySpecialization(profile)
+
+    Log("========================================")
+    Log("NATURAL PROFILE")
+    Log("========================================")
+
+    Log(
+        "Role: "
+        .. tostring(naturalRole)
+    )
+
+    if naturalSpecialization then
+        Log(
+            "Primary Specialization: "
+            .. tostring(naturalSpecialization.ID)
+            .. " ("
+            .. string.format(
+                "%.2f",
+                tonumber(naturalSpecialization.Score) or 0
+            )
+            .. ")"
+        )
+    else
+        Log("Primary Specialization: none")
+    end
+
+    if secondarySpecialization then
+        Log(
+            "Secondary Specialization: "
+            .. tostring(secondarySpecialization.ID)
+            .. " ("
+            .. string.format(
+                "%.2f",
+                tonumber(secondarySpecialization.Score) or 0
+            )
+            .. ")"
+        )
+    else
+        Log("Secondary Specialization: none")
+    end
+
+    Log("========================================")
 end
 
 
@@ -1792,7 +1960,13 @@ function Specialization.OnGameStart()
 
     Specialization.PrintCurrent()
 
-    Log("Specialization Scoring V1 initialization complete")
+    --------------------------------------------------------
+    -- NATURAL PROFILE
+    --------------------------------------------------------
+
+    Specialization.PrintNaturalProfile(profile)
+
+    Log("Specialization Scoring V1.1 initialization complete")
 end
 
 
