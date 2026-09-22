@@ -1,17 +1,23 @@
 -----------------------------------------------------------
 -- BanditsAIOverhaul
 -- BAO_AI_TestHarness.lua
--- AI Test Harness V1.2
+-- AI Test Harness V1.3
+--
+-- Purpose:
+-- Safe one-shot testing of Decision System.
 --
 -- IMPORTANT:
--- This harness runs ONCE per game session.
--- It does NOT continuously calculate decisions.
+-- Harness waits for BehaviorProfile to become actually
+-- available before running tests.
+--
+-- Tests are executed ONLY ONCE.
+-- No continuous decision calculations.
 -----------------------------------------------------------
 
 BAO = BAO or {}
 
 -----------------------------------------------------------
--- GLOBAL DUPLICATE PROTECTION
+-- DUPLICATE PROTECTION
 -----------------------------------------------------------
 
 if BAO.__AI_TEST_HARNESS_STARTED then
@@ -65,6 +71,10 @@ else
 
     local TESTS = {
 
+        ---------------------------------------------------
+        -- NORMAL
+        ---------------------------------------------------
+
         {
             Name = "NORMAL",
 
@@ -87,6 +97,10 @@ else
                 Ranged = true
             }
         },
+
+        ---------------------------------------------------
+        -- LOW HEALTH
+        ---------------------------------------------------
 
         {
             Name = "LOW_HEALTH",
@@ -111,6 +125,10 @@ else
             }
         },
 
+        ---------------------------------------------------
+        -- HIGH FATIGUE
+        ---------------------------------------------------
+
         {
             Name = "HIGH_FATIGUE",
 
@@ -133,6 +151,10 @@ else
                 Ranged = true
             }
         },
+
+        ---------------------------------------------------
+        -- MANY ZOMBIES
+        ---------------------------------------------------
 
         {
             Name = "MANY_ZOMBIES",
@@ -157,6 +179,10 @@ else
             }
         },
 
+        ---------------------------------------------------
+        -- NIGHT
+        ---------------------------------------------------
+
         {
             Name = "NIGHT",
 
@@ -179,6 +205,10 @@ else
                 Ranged = true
             }
         },
+
+        ---------------------------------------------------
+        -- NO WEAPON
+        ---------------------------------------------------
 
         {
             Name = "NO_WEAPON",
@@ -203,6 +233,10 @@ else
             }
         },
 
+        ---------------------------------------------------
+        -- HUNGRY
+        ---------------------------------------------------
+
         {
             Name = "HUNGRY",
 
@@ -226,6 +260,10 @@ else
             }
         },
 
+        ---------------------------------------------------
+        -- THIRSTY
+        ---------------------------------------------------
+
         {
             Name = "THIRSTY",
 
@@ -248,6 +286,10 @@ else
                 Ranged = true
             }
         },
+
+        ---------------------------------------------------
+        -- PANIC
+        ---------------------------------------------------
 
         {
             Name = "PANIC",
@@ -290,6 +332,119 @@ else
             Log("Retry OnTick handler removed")
 
         end
+
+    end
+
+    -------------------------------------------------------
+    -- CHECK BEHAVIOR PROFILE
+    -------------------------------------------------------
+
+    local function GetReadyBehaviorProfile()
+
+        if not BAO.BehaviorProfile then
+            return nil
+        end
+
+        if not BAO.BehaviorProfile.Get then
+            return nil
+        end
+
+        local profile = BAO.BehaviorProfile.Get()
+
+        if not profile then
+            return nil
+        end
+
+        ---------------------------------------------------
+        -- Verify that the profile actually contains data.
+        ---------------------------------------------------
+
+        if not profile.Personality then
+            return nil
+        end
+
+        if not profile.Capabilities then
+            return nil
+        end
+
+        if not profile.Tendencies then
+            return nil
+        end
+
+        return profile
+
+    end
+
+    -------------------------------------------------------
+    -- CHECK WORLD CONTEXT
+    -------------------------------------------------------
+
+    local function WorldContextReady()
+
+        if not BAO.WorldContext then
+            return false
+        end
+
+        if BAO.WorldContext.Current then
+            return true
+        end
+
+        if BAO.WorldContext.Get then
+
+            local world = BAO.WorldContext.Get()
+
+            if world then
+                return true
+            end
+
+        end
+
+        return false
+
+    end
+
+    -------------------------------------------------------
+    -- CHECK ALL DEPENDENCIES
+    -------------------------------------------------------
+
+    local function DependenciesReady()
+
+        ---------------------------------------------------
+        -- DecisionSystem
+        ---------------------------------------------------
+
+        if not BAO.DecisionSystem then
+
+            return false
+        end
+
+        if not BAO.DecisionSystem.CalculateWithContext then
+
+            return false
+        end
+
+        ---------------------------------------------------
+        -- BehaviorProfile
+        ---------------------------------------------------
+
+        local behavior = GetReadyBehaviorProfile()
+
+        if not behavior then
+
+            return false
+        end
+
+        ---------------------------------------------------
+        -- WorldContext
+        ---------------------------------------------------
+
+        if not WorldContextReady() then
+
+            return false
+        end
+
+        return true
+
     end
 
     -------------------------------------------------------
@@ -302,7 +457,12 @@ else
 
         Log("")
         Log("--------------------------------------------")
-        Log("TEST #" .. tostring(totalCount) .. ": " .. test.Name)
+        Log(
+            "TEST #"
+            .. tostring(totalCount)
+            .. ": "
+            .. tostring(test.Name)
+        )
         Log("--------------------------------------------")
 
         local DecisionSystem = BAO.DecisionSystem
@@ -314,6 +474,7 @@ else
             failCount = failCount + 1
 
             return
+
         end
 
         if not DecisionSystem.CalculateWithContext then
@@ -323,6 +484,7 @@ else
             failCount = failCount + 1
 
             return
+
         end
 
         local result =
@@ -337,6 +499,17 @@ else
             failCount = failCount + 1
 
             return
+
+        end
+
+        if not result.Decision then
+
+            Log("FAIL: result.Decision missing")
+
+            failCount = failCount + 1
+
+            return
+
         end
 
         local actual = result.Decision.ID
@@ -376,6 +549,7 @@ else
             Log("RESULT: FAIL")
 
         end
+
     end
 
     -------------------------------------------------------
@@ -389,6 +563,7 @@ else
             Log("Test suite already running")
 
             return
+
         end
 
         if completed then
@@ -396,6 +571,7 @@ else
             Log("Test suite already completed")
 
             return
+
         end
 
         running = true
@@ -406,12 +582,12 @@ else
 
         Log("")
         Log("============================================")
-        Log("BAO AI TEST HARNESS V1.2")
+        Log("BAO AI TEST HARNESS V1.3")
         Log("STARTING TEST SUITE")
         Log("============================================")
 
         ---------------------------------------------------
-        -- RUN TESTS ONCE
+        -- RUN EACH TEST EXACTLY ONCE
         ---------------------------------------------------
 
         for _, test in ipairs(TESTS) do
@@ -460,33 +636,12 @@ else
         running = false
 
         ---------------------------------------------------
-        -- VERY IMPORTANT
-        -- No more OnTick testing.
+        -- IMPORTANT:
+        -- Never poll again after completion.
         ---------------------------------------------------
 
         RemoveRetryHandler()
 
-    end
-
-    -------------------------------------------------------
-    -- CHECK DEPENDENCIES
-    -------------------------------------------------------
-
-    local function DependenciesReady()
-
-        if not BAO.DecisionSystem then
-            return false
-        end
-
-        if not BAO.DecisionSystem.CalculateWithContext then
-            return false
-        end
-
-        if not BAO.BehaviorProfile then
-            return false
-        end
-
-        return true
     end
 
     -------------------------------------------------------
@@ -507,22 +662,26 @@ else
             return
         end
 
+        ---------------------------------------------------
+        -- Wait until ALL BAO dependencies are actually
+        -- initialized.
+        ---------------------------------------------------
+
         if not DependenciesReady() then
 
             return
+
         end
+
+        ---------------------------------------------------
+        -- Everything is ready.
+        ---------------------------------------------------
 
         initialized = true
 
-        ---------------------------------------------------
-        -- Remove dependency polling BEFORE running tests.
-        ---------------------------------------------------
+        Log("All dependencies ready")
 
         RemoveRetryHandler()
-
-        ---------------------------------------------------
-        -- Run exactly once.
-        ---------------------------------------------------
 
         RunAllTests()
 
@@ -538,6 +697,10 @@ else
 
             Log("OnGameStart")
 
+            ------------------------------------------------
+            -- Do NOT assume dependencies are ready here.
+            ------------------------------------------------
+
             TryStartTests()
 
         end)
@@ -545,11 +708,12 @@ else
     end
 
     -------------------------------------------------------
-    -- RETRY HANDLER
+    -- RETRY
     --
-    -- IMPORTANT:
-    -- We DO NOT run tests every tick.
-    -- We only check dependencies once every 60 ticks.
+    -- Check only once every 60 ticks.
+    --
+    -- This is NOT a decision calculation.
+    -- It only checks whether modules are ready.
     -------------------------------------------------------
 
     if Events and Events.OnTick then
@@ -561,6 +725,7 @@ else
                 RemoveRetryHandler()
 
                 return
+
             end
 
             retryTick = retryTick + 1
@@ -580,30 +745,39 @@ else
     end
 
     -------------------------------------------------------
-    -- PUBLIC API
+    -- PUBLIC MANUAL RUN
     -------------------------------------------------------
 
     function TestHarness.Run()
 
         if completed then
 
-            Log("Manual Run ignored: suite already completed")
+            Log(
+                "Manual Run ignored: suite already completed"
+            )
 
             return false
+
         end
 
         if running then
 
-            Log("Manual Run ignored: suite already running")
+            Log(
+                "Manual Run ignored: suite already running"
+            )
 
             return false
+
         end
 
         if not DependenciesReady() then
 
-            Log("Manual Run failed: dependencies not ready")
+            Log(
+                "Manual Run failed: dependencies not ready"
+            )
 
             return false
+
         end
 
         initialized = true
@@ -613,13 +787,17 @@ else
         RunAllTests()
 
         return true
+
     end
 
+    -------------------------------------------------------
+    -- STATUS
     -------------------------------------------------------
 
     function TestHarness.IsCompleted()
 
         return completed
+
     end
 
     -------------------------------------------------------
@@ -635,7 +813,9 @@ else
             Failed = failCount,
 
             Completed = completed
+
         }
+
     end
 
     -------------------------------------------------------
@@ -648,6 +828,6 @@ else
     -- MODULE LOADED
     -------------------------------------------------------
 
-    Log("AI Test Harness V1.2 module loaded")
+    Log("AI Test Harness V1.3 module loaded")
 
 end
