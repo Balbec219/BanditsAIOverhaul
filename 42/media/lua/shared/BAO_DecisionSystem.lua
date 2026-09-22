@@ -1,15 +1,20 @@
 -- =========================================================
 -- BanditsAIOverhaul
 -- BAO_DecisionSystem.lua
--- Decision System V1.1
+-- Decision System V1.2
 --
 -- Purpose:
--- Combines:
---   1. BehaviorProfile - who the NPC is
---   2. WorldContext    - what is happening right now
+--   Combines:
+--     1. BehaviorProfile - who the NPC is
+--     2. WorldContext    - what is happening right now
 --
--- Result:
---   Selects the most appropriate high-level decision.
+-- V1.2 additions:
+--   - Stores current decision
+--   - Detects decision changes
+--   - Logs decision changes
+--   - Prevents repeated decision spam
+--   - Supports automatic recalculation
+--   - Provides API for future Action System
 -- =========================================================
 
 BAO = BAO or {}
@@ -76,6 +81,22 @@ local DECISIONS = {
 
 
 -- =========================================================
+-- Runtime state
+-- =========================================================
+
+local initialized = false
+local attempts = 0
+
+local currentDecision = nil
+local previousDecision = nil
+
+local lastCalculation = nil
+local decisionChanged = false
+
+local lastWorldContext = nil
+
+
+-- =========================================================
 -- Utility
 -- =========================================================
 
@@ -100,6 +121,73 @@ local function SafeNumber(value, default)
     end
 
     return default or 0
+end
+
+
+-- =========================================================
+-- World Context change detection
+-- =========================================================
+
+local function WorldContextChanged(world)
+
+    if not world then
+        return false
+    end
+
+    if not lastWorldContext then
+        return true
+    end
+
+    local fields = {
+        "Health",
+        "Hunger",
+        "Thirst",
+        "Fatigue",
+        "Panic",
+        "Pain",
+        "ZombiesNearby",
+        "Night",
+        "HasWeapon",
+        "Ranged"
+    }
+
+    for _, field in ipairs(fields) do
+
+        if world[field] ~= lastWorldContext[field] then
+            return true
+        end
+
+    end
+
+    return false
+end
+
+
+local function StoreWorldContext(world)
+
+    if not world then
+        lastWorldContext = nil
+        return
+    end
+
+    lastWorldContext = {}
+
+    local fields = {
+        "Health",
+        "Hunger",
+        "Thirst",
+        "Fatigue",
+        "Panic",
+        "Pain",
+        "ZombiesNearby",
+        "Night",
+        "HasWeapon",
+        "Ranged"
+    }
+
+    for _, field in ipairs(fields) do
+        lastWorldContext[field] = world[field]
+    end
 end
 
 
@@ -511,6 +599,77 @@ end
 
 
 -- =========================================================
+-- Update decision state
+-- =========================================================
+
+local function UpdateDecisionState(result)
+
+    decisionChanged = false
+
+    if not result then
+        return
+    end
+
+    local newDecision =
+        result.ID
+
+    local oldDecision =
+        currentDecision and currentDecision.ID or nil
+
+
+    -- First decision
+    if not currentDecision then
+
+        previousDecision = nil
+        currentDecision = result
+
+        Log(
+            "Initial decision: " ..
+            tostring(newDecision)
+        )
+
+        return
+    end
+
+
+    -- Decision changed
+    if oldDecision ~= newDecision then
+
+        previousDecision = currentDecision
+        currentDecision = result
+
+        decisionChanged = true
+
+        Log(
+            "Decision changed: " ..
+            tostring(oldDecision) ..
+            " -> " ..
+            tostring(newDecision)
+        )
+
+        Log(
+            "New decision score: " ..
+            string.format("%.2f", result.Score)
+        )
+
+        Log(
+            "New decision priority: " ..
+            tostring(result.Priority)
+        )
+
+        return
+    end
+
+
+    -- Same decision
+    --
+    -- Update the stored result so that the Action System
+    -- can always access the latest score/context.
+    currentDecision = result
+end
+
+
+-- =========================================================
 -- Calculate
 -- =========================================================
 
@@ -588,33 +747,143 @@ function DecisionSystem.Calculate()
     end
 
 
-    Log("Decision System V1.1 calculation complete")
+    -- Update persistent decision state
+    UpdateDecisionState(result)
 
-    return {
+
+    -- Store current WorldContext snapshot
+    StoreWorldContext(world)
+
+
+    lastCalculation = {
         Decision = result,
         Scores = scores,
         WorldContext = world,
         BehaviorProfile = behavior
     }
+
+
+    Log("Decision System V1.2 calculation complete")
+
+    return lastCalculation
 end
 
 
 -- =========================================================
 -- Get
+--
+-- Compatibility API.
+--
+-- Returns the latest calculation.
+-- If no calculation exists yet, calculates once.
 -- =========================================================
 
 function DecisionSystem.Get()
+
+    if lastCalculation then
+        return lastCalculation
+    end
 
     return DecisionSystem.Calculate()
 end
 
 
 -- =========================================================
--- Initialization
+-- Recalculate
+--
+-- Explicit recalculation API.
+--
+-- Future systems can call:
+--
+-- BAO.DecisionSystem.Recalculate()
 -- =========================================================
 
-local initialized = false
-local attempts = 0
+function DecisionSystem.Recalculate()
+
+    return DecisionSystem.Calculate()
+end
+
+
+-- =========================================================
+-- GetCurrentDecision
+--
+-- API for future Action System.
+--
+-- Returns:
+--   {
+--       ID = "...",
+--       Score = number,
+--       Priority = number
+--   }
+-- =========================================================
+
+function DecisionSystem.GetCurrentDecision()
+
+    return currentDecision
+end
+
+
+-- =========================================================
+-- GetPreviousDecision
+-- =========================================================
+
+function DecisionSystem.GetPreviousDecision()
+
+    return previousDecision
+end
+
+
+-- =========================================================
+-- HasDecisionChanged
+-- =========================================================
+
+function DecisionSystem.HasDecisionChanged()
+
+    return decisionChanged
+end
+
+
+-- =========================================================
+-- GetLastCalculation
+-- =========================================================
+
+function DecisionSystem.GetLastCalculation()
+
+    return lastCalculation
+end
+
+
+-- =========================================================
+-- Automatic WorldContext update
+-- =========================================================
+
+local function CheckWorldContextUpdate()
+
+    if not initialized then
+        return
+    end
+
+    local world =
+        GetWorldContext()
+
+    if not world then
+        return
+    end
+
+
+    if WorldContextChanged(world) then
+
+        Log("WorldContext changed - recalculating decision")
+
+        DecisionSystem.Calculate()
+
+    end
+end
+
+
+-- =========================================================
+-- Initialization
+-- =========================================================
 
 local function Initialize()
 
@@ -650,9 +919,11 @@ local function Initialize()
     Log("BehaviorProfile ready")
     Log("WorldContext ready")
 
+
     DecisionSystem.Calculate()
 
-    Log("Decision System V1.1 initialization complete")
+
+    Log("Decision System V1.2 initialization complete")
 
     return true
 end
@@ -682,7 +953,13 @@ if Events then
         Events.OnTick.Add(function()
 
             if not initialized then
+
                 Initialize()
+
+            else
+
+                CheckWorldContextUpdate()
+
             end
 
         end)
@@ -700,4 +977,4 @@ BAO.DecisionSystem =
     DecisionSystem
 
 
-Log("Decision System V1.1 module loaded")
+Log("Decision System V1.2 module loaded")
