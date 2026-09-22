@@ -1,7 +1,7 @@
 -- =========================================================
 -- BanditsAIOverhaul
 -- BAO_DecisionSystem.lua
--- Decision System V1.2
+-- Decision System V1.2.1
 --
 -- Purpose:
 --   Combines:
@@ -15,6 +15,12 @@
 --   - Prevents repeated decision spam
 --   - Supports automatic recalculation
 --   - Provides API for future Action System
+--
+-- V1.2.1 additions:
+--   - CalculateWithContext() test API
+--   - Allows AI Test Harness to test artificial situations
+--   - Does not modify real WorldContext
+--   - Does not modify persistent DecisionSystem state
 -- =========================================================
 
 BAO = BAO or {}
@@ -789,6 +795,100 @@ end
 
 
 -- =========================================================
+-- CalculateWithContext
+--
+-- TEST API
+--
+-- Calculates a decision using an artificial WorldContext.
+--
+-- IMPORTANT:
+--   This function does NOT:
+--     - modify BAO.WorldContext
+--     - modify currentDecision
+--     - modify previousDecision
+--     - modify lastCalculation
+--     - modify lastWorldContext
+--     - trigger normal decision-change detection
+--
+-- This allows AI_TestHarness to safely test situations.
+-- =========================================================
+
+function DecisionSystem.CalculateWithContext(testWorldContext)
+
+    Log("===== TEST DECISION CALCULATION =====")
+
+    if not testWorldContext then
+        Log("TEST ERROR: test WorldContext is nil")
+        return nil
+    end
+
+
+    local behavior =
+        GetBehaviorProfile()
+
+    if not behavior then
+        Log("TEST ERROR: BehaviorProfile unavailable")
+        return nil
+    end
+
+
+    local scores =
+        CalculateBaseScores(behavior)
+
+
+    scores =
+        ApplyWorldContext(scores, testWorldContext)
+
+
+    Log("TEST Decision scores:")
+
+    for _, definition in ipairs(DECISIONS) do
+
+        local score =
+            SafeNumber(scores[definition.id], 0)
+
+        Log(
+            "TEST " ..
+            definition.id ..
+            " = " ..
+            string.format("%.2f", score)
+        )
+    end
+
+
+    local result =
+        SelectBestDecision(scores)
+
+
+    if result then
+
+        Log(
+            "TEST FINAL DECISION: " ..
+            tostring(result.ID)
+        )
+
+        Log(
+            "TEST FINAL SCORE: " ..
+            string.format("%.2f", result.Score)
+        )
+
+        Log(
+            "TEST FINAL PRIORITY: " ..
+            tostring(result.Priority)
+        )
+    end
+
+
+    return {
+        Decision = result,
+        Scores = scores,
+        WorldContext = testWorldContext,
+        BehaviorProfile = behavior
+    }
+end
+
+
+-- =========================================================
 -- Recalculate
 --
 -- Explicit recalculation API.
@@ -893,7 +993,10 @@ local function Initialize()
 
     attempts = attempts + 1
 
-    Log("Initialization attempt " .. tostring(attempts))
+    Log(
+        "Initialization attempt " ..
+        tostring(attempts)
+    )
 
 
     local behaviorProfile =
@@ -977,4 +1080,4 @@ BAO.DecisionSystem =
     DecisionSystem
 
 
-Log("Decision System V1.2 module loaded")
+Log("Decision System V1.2.1 module loaded")
