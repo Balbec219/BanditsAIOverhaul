@@ -1,18 +1,85 @@
----@diagnostic disable: undefined-global
+-- =========================================================
+-- BanditsAIOverhaul
+-- BAO_DecisionSystem.lua
+-- Decision System V1.1
+--
+-- Purpose:
+-- Combines:
+--   1. BehaviorProfile - who the NPC is
+--   2. WorldContext    - what is happening right now
+--
+-- Result:
+--   Selects the most appropriate high-level decision.
+-- =========================================================
 
 BAO = BAO or {}
-BAO.DecisionSystem = BAO.DecisionSystem or {}
 
---------------------------------------------------
--- BAO Decision System V1
---------------------------------------------------
+local DecisionSystem = {}
+
+local MODULE_NAME = "DecisionSystem"
 
 local function Log(message)
-    print("[BAO] " .. tostring(message))
+    print("[BAO][" .. MODULE_NAME .. "] " .. tostring(message))
 end
 
+
+-- =========================================================
+-- Decision definitions
+-- =========================================================
+
+local DECISIONS = {
+    {
+        id = "patrol",
+        priority = 50
+    },
+
+    {
+        id = "explore",
+        priority = 30
+    },
+
+    {
+        id = "gather_resources",
+        priority = 40
+    },
+
+    {
+        id = "guard",
+        priority = 60
+    },
+
+    {
+        id = "help_ally",
+        priority = 70
+    },
+
+    {
+        id = "rest",
+        priority = 20
+    },
+
+    {
+        id = "heal",
+        priority = 100
+    },
+
+    {
+        id = "retreat",
+        priority = 90
+    },
+
+    {
+        id = "combat",
+        priority = 80
+    }
+}
+
+
+-- =========================================================
+-- Utility
+-- =========================================================
+
 local function Clamp(value, minValue, maxValue)
-    value = tonumber(value) or 0
 
     if value < minValue then
         return minValue
@@ -25,80 +92,22 @@ local function Clamp(value, minValue, maxValue)
     return value
 end
 
-local function Round(value, decimals)
-    value = tonumber(value) or 0
-    decimals = decimals or 2
 
-    local multiplier = 10 ^ decimals
+local function SafeNumber(value, default)
 
-    return math.floor(value * multiplier + 0.5) / multiplier
-end
-
-local function GetTableValue(tbl, key, defaultValue)
-
-    if type(tbl) ~= "table" then
-        return defaultValue
+    if type(value) == "number" then
+        return value
     end
 
-    local value = tbl[key]
-
-    if value == nil then
-        return defaultValue
-    end
-
-    return value
+    return default or 0
 end
 
 
---------------------------------------------------
--- DECISIONS
---------------------------------------------------
+-- =========================================================
+-- Get Behavior Profile
+-- =========================================================
 
-BAO.DecisionSystem.Decisions = {
-    PATROL = "patrol",
-    EXPLORE = "explore",
-    GATHER_RESOURCES = "gather_resources",
-    GUARD = "guard",
-    HELP_ALLY = "help_ally",
-    REST = "rest",
-    HEAL = "heal",
-    RETREAT = "retreat",
-    COMBAT = "combat"
-}
-
-
---------------------------------------------------
--- PRIORITIES
---------------------------------------------------
-
-BAO.DecisionSystem.Priority = {
-    heal = 100,
-    retreat = 90,
-    combat = 80,
-    help_ally = 70,
-    guard = 60,
-    patrol = 50,
-    gather_resources = 40,
-    explore = 30,
-    rest = 20
-}
-
-
---------------------------------------------------
--- STATE
---------------------------------------------------
-
-BAO.DecisionSystem.CurrentDecision = nil
-BAO.DecisionSystem.LastScores = nil
-BAO.DecisionSystem.Initialized = false
-BAO.DecisionSystem.InitializationAttempts = 0
-
-
---------------------------------------------------
--- GET BEHAVIOR PROFILE
---------------------------------------------------
-
-function BAO.DecisionSystem.GetBehaviorProfile()
+local function GetBehaviorProfile()
 
     if not BAO.BehaviorProfile then
         return nil
@@ -112,665 +121,583 @@ function BAO.DecisionSystem.GetBehaviorProfile()
 end
 
 
---------------------------------------------------
--- PATROL
---------------------------------------------------
+-- =========================================================
+-- Get World Context
+-- =========================================================
 
-function BAO.DecisionSystem.CalculatePatrolScore(profile)
+local function GetWorldContext()
 
-    local capabilities = profile.Capabilities or {}
-    local tendencies = profile.Tendencies or {}
-    local personality = profile.Personality or {}
-
-    local security = GetTableValue(capabilities, "Security", 0)
-    local recon = GetTableValue(capabilities, "Recon", 0)
-    local combat = GetTableValue(capabilities, "Combat", 0)
-
-    local scoutingConfidence =
-        GetTableValue(tendencies, "ScoutingConfidence", 0)
-
-    local discipline =
-        GetTableValue(personality, "Discipline", 50)
-
-    local score =
-        security * 0.25 +
-        recon * 0.25 +
-        combat * 0.15 +
-        scoutingConfidence * 0.20 +
-        discipline * 0.15
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- EXPLORE
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateExploreScore(profile)
-
-    local capabilities = profile.Capabilities or {}
-    local tendencies = profile.Tendencies or {}
-    local personality = profile.Personality or {}
-
-    local recon =
-        GetTableValue(capabilities, "Recon", 0)
-
-    local survival =
-        GetTableValue(capabilities, "Survival", 0)
-
-    local explorationDrive =
-        GetTableValue(tendencies, "ExplorationDrive", 0)
-
-    local scoutingConfidence =
-        GetTableValue(tendencies, "ScoutingConfidence", 0)
-
-    local curiosity =
-        GetTableValue(personality, "Curiosity", 50)
-
-    local riskTolerance =
-        GetTableValue(personality, "RiskTolerance", 50)
-
-    local score =
-        recon * 0.25 +
-        survival * 0.15 +
-        explorationDrive * 0.25 +
-        scoutingConfidence * 0.15 +
-        curiosity * 0.10 +
-        riskTolerance * 0.10
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- GATHER RESOURCES
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateGatherResourcesScore(profile)
-
-    local capabilities = profile.Capabilities or {}
-    local tendencies = profile.Tendencies or {}
-
-    local survival =
-        GetTableValue(capabilities, "Survival", 0)
-
-    local logistics =
-        GetTableValue(capabilities, "Logistics", 0)
-
-    local agriculture =
-        GetTableValue(capabilities, "Agriculture", 0)
-
-    local resourcePriority =
-        GetTableValue(tendencies, "ResourcePriority", 0)
-
-    local wildernessConfidence =
-        GetTableValue(tendencies, "WildernessConfidence", 0)
-
-    local score =
-        survival * 0.30 +
-        logistics * 0.20 +
-        agriculture * 0.10 +
-        resourcePriority * 0.25 +
-        wildernessConfidence * 0.15
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- GUARD
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateGuardScore(profile)
-
-    local capabilities = profile.Capabilities or {}
-    local tendencies = profile.Tendencies or {}
-    local personality = profile.Personality or {}
-
-    local security =
-        GetTableValue(capabilities, "Security", 0)
-
-    local combat =
-        GetTableValue(capabilities, "Combat", 0)
-
-    local discipline =
-        GetTableValue(personality, "Discipline", 50)
-
-    local combatDiscipline =
-        GetTableValue(tendencies, "CombatDiscipline", 0)
-
-    local courage =
-        GetTableValue(personality, "Courage", 50)
-
-    local score =
-        security * 0.30 +
-        combat * 0.20 +
-        discipline * 0.20 +
-        combatDiscipline * 0.15 +
-        courage * 0.15
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- HELP ALLY
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateHelpAllyScore(profile)
-
-    local capabilities = profile.Capabilities or {}
-    local tendencies = profile.Tendencies or {}
-    local personality = profile.Personality or {}
-
-    local leadership =
-        GetTableValue(capabilities, "Leadership", 0)
-
-    local medical =
-        GetTableValue(capabilities, "Medical", 0)
-
-    local logistics =
-        GetTableValue(capabilities, "Logistics", 0)
-
-    local cooperation =
-        GetTableValue(tendencies, "Cooperation", 0)
-
-    local loyalty =
-        GetTableValue(personality, "Loyalty", 50)
-
-    local score =
-        leadership * 0.20 +
-        medical * 0.20 +
-        logistics * 0.15 +
-        cooperation * 0.25 +
-        loyalty * 0.20
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- REST
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateRestScore(profile)
-
-    local personality = profile.Personality or {}
-    local tendencies = profile.Tendencies or {}
-
-    local fear =
-        GetTableValue(personality, "Fear", 50)
-
-    local riskTolerance =
-        GetTableValue(personality, "RiskTolerance", 50)
-
-    local retreatTendency =
-        GetTableValue(tendencies, "RetreatTendency", 0)
-
-    local score =
-        fear * 0.30 +
-        (100 - riskTolerance) * 0.25 +
-        retreatTendency * 0.25 +
-        20
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- HEAL
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateHealScore(profile)
-
-    local capabilities = profile.Capabilities or {}
-    local personality = profile.Personality or {}
-
-    local medical =
-        GetTableValue(capabilities, "Medical", 0)
-
-    local survival =
-        GetTableValue(capabilities, "Survival", 0)
-
-    local fear =
-        GetTableValue(personality, "Fear", 50)
-
-    local score =
-        medical * 0.40 +
-        survival * 0.20 +
-        fear * 0.20 +
-        20
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- RETREAT
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateRetreatScore(profile)
-
-    local personality = profile.Personality or {}
-    local tendencies = profile.Tendencies or {}
-    local capabilities = profile.Capabilities or {}
-
-    local fear =
-        GetTableValue(personality, "Fear", 50)
-
-    local courage =
-        GetTableValue(personality, "Courage", 50)
-
-    local riskTolerance =
-        GetTableValue(personality, "RiskTolerance", 50)
-
-    local retreatTendency =
-        GetTableValue(tendencies, "RetreatTendency", 0)
-
-    local combat =
-        GetTableValue(capabilities, "Combat", 0)
-
-    local score =
-        fear * 0.30 +
-        (100 - courage) * 0.15 +
-        (100 - riskTolerance) * 0.20 +
-        retreatTendency * 0.25 +
-        (100 - combat) * 0.10
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- COMBAT
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateCombatScore(profile)
-
-    local capabilities = profile.Capabilities or {}
-    local tendencies = profile.Tendencies or {}
-    local personality = profile.Personality or {}
-
-    local combat =
-        GetTableValue(capabilities, "Combat", 0)
-
-    local aggression =
-        GetTableValue(personality, "Aggression", 50)
-
-    local courage =
-        GetTableValue(personality, "Courage", 50)
-
-    local combatAggression =
-        GetTableValue(tendencies, "CombatAggression", 0)
-
-    local combatDiscipline =
-        GetTableValue(tendencies, "CombatDiscipline", 0)
-
-    local score =
-        combat * 0.30 +
-        aggression * 0.20 +
-        courage * 0.15 +
-        combatAggression * 0.20 +
-        combatDiscipline * 0.15
-
-    return Clamp(score, 0, 100)
-end
-
-
---------------------------------------------------
--- CALCULATE ALL SCORES
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateScores(profile)
-
-    if not profile then
+    if not BAO.WorldContext then
         return nil
     end
 
+    -- Current is maintained by WorldContext V1.1
+    if BAO.WorldContext.Current then
+        return BAO.WorldContext.Current
+    end
+
+    -- Fallback if Get exists
+    if BAO.WorldContext.Get then
+        return BAO.WorldContext.Get()
+    end
+
+    return nil
+end
+
+
+-- =========================================================
+-- Base scores
+-- =========================================================
+
+local function CalculateBaseScores(behavior)
+
     local scores = {}
 
+    if not behavior then
+        Log("BehaviorProfile is nil while calculating base scores")
+        return scores
+    end
+
+    local personality = behavior.Personality or {}
+    local capabilities = behavior.Capabilities or {}
+    local tendencies = behavior.Tendencies or {}
+
+    local combat = SafeNumber(capabilities.Combat, 0)
+    local survival = SafeNumber(capabilities.Survival, 0)
+    local recon = SafeNumber(capabilities.Recon, 0)
+    local security = SafeNumber(capabilities.Security, 0)
+    local logistics = SafeNumber(capabilities.Logistics, 0)
+    local leadership = SafeNumber(capabilities.Leadership, 0)
+
+    local aggression = SafeNumber(personality.Aggression, 50)
+    local courage = SafeNumber(personality.Courage, 50)
+    local fear = SafeNumber(personality.Fear, 50)
+    local discipline = SafeNumber(personality.Discipline, 50)
+    local riskTolerance = SafeNumber(personality.RiskTolerance, 50)
+    local curiosity = SafeNumber(personality.Curiosity, 50)
+
+    local combatAggression =
+        SafeNumber(tendencies.CombatAggression, aggression)
+
+    local combatDiscipline =
+        SafeNumber(tendencies.CombatDiscipline, discipline)
+
+    local scoutingConfidence =
+        SafeNumber(tendencies.ScoutingConfidence, recon)
+
+    local explorationDrive =
+        SafeNumber(tendencies.ExplorationDrive, curiosity)
+
+    local resourcePriority =
+        SafeNumber(tendencies.ResourcePriority, logistics)
+
+    local cooperation =
+        SafeNumber(tendencies.Cooperation, leadership)
+
+
+    -- Patrol
     scores.patrol =
-        BAO.DecisionSystem.CalculatePatrolScore(profile)
+        20
+        + recon * 0.25
+        + security * 0.20
+        + discipline * 0.10
 
+
+    -- Explore
     scores.explore =
-        BAO.DecisionSystem.CalculateExploreScore(profile)
+        15
+        + scoutingConfidence * 0.35
+        + explorationDrive * 0.25
+        + riskTolerance * 0.10
 
+
+    -- Gather resources
     scores.gather_resources =
-        BAO.DecisionSystem.CalculateGatherResourcesScore(profile)
+        15
+        + survival * 0.20
+        + logistics * 0.25
+        + resourcePriority * 0.30
 
+
+    -- Guard
     scores.guard =
-        BAO.DecisionSystem.CalculateGuardScore(profile)
+        20
+        + security * 0.30
+        + discipline * 0.20
+        + courage * 0.10
 
+
+    -- Help ally
     scores.help_ally =
-        BAO.DecisionSystem.CalculateHelpAllyScore(profile)
+        15
+        + cooperation * 0.30
+        + courage * 0.20
+        + leadership * 0.20
 
+
+    -- Rest
     scores.rest =
-        BAO.DecisionSystem.CalculateRestScore(profile)
+        15
+        + survival * 0.20
+        + discipline * 0.15
+        + (100 - combatAggression) * 0.10
 
+
+    -- Heal
     scores.heal =
-        BAO.DecisionSystem.CalculateHealScore(profile)
+        20
+        + survival * 0.15
+        + discipline * 0.10
 
+
+    -- Retreat
     scores.retreat =
-        BAO.DecisionSystem.CalculateRetreatScore(profile)
+        10
+        + fear * 0.20
+        + (100 - courage) * 0.20
+        + (100 - riskTolerance) * 0.20
 
+
+    -- Combat
     scores.combat =
-        BAO.DecisionSystem.CalculateCombatScore(profile)
+        15
+        + combat * 0.30
+        + combatAggression * 0.25
+        + courage * 0.15
+        + riskTolerance * 0.10
+        + combatDiscipline * 0.10
+
 
     return scores
 end
 
 
---------------------------------------------------
--- SELECT BEST
---------------------------------------------------
+-- =========================================================
+-- World Context modifiers
+-- =========================================================
 
-function BAO.DecisionSystem.SelectBestDecision(scores)
+local function ApplyWorldContext(scores, world)
 
-    if not scores then
-        return nil
+    if not world then
+        Log("WorldContext is nil - using BehaviorProfile only")
+        return scores
     end
+
+    local health =
+        SafeNumber(world.Health, 100)
+
+    local hunger =
+        SafeNumber(world.Hunger, 0)
+
+    local thirst =
+        SafeNumber(world.Thirst, 0)
+
+    local fatigue =
+        SafeNumber(world.Fatigue, 0)
+
+    local panic =
+        SafeNumber(world.Panic, 0)
+
+    local pain =
+        SafeNumber(world.Pain, 0)
+
+    local zombiesNearby =
+        SafeNumber(world.ZombiesNearby, 0)
+
+    local night =
+        world.Night == true
+
+    local hasWeapon =
+        world.HasWeapon == true
+
+    local ranged =
+        world.Ranged == true
+
+
+    -- -----------------------------------------------------
+    -- HEALTH
+    -- -----------------------------------------------------
+
+    if health < 70 then
+        scores.heal = scores.heal + 15
+    end
+
+    if health < 40 then
+        scores.heal = scores.heal + 25
+        scores.retreat = scores.retreat + 15
+        scores.combat = scores.combat - 15
+    end
+
+    if health < 20 then
+        scores.heal = scores.heal + 30
+        scores.retreat = scores.retreat + 25
+        scores.combat = scores.combat - 30
+    end
+
+
+    -- -----------------------------------------------------
+    -- FATIGUE
+    -- -----------------------------------------------------
+
+    if fatigue > 50 then
+        scores.rest = scores.rest + 20
+        scores.combat = scores.combat - 10
+        scores.explore = scores.explore - 5
+    end
+
+    if fatigue > 75 then
+        scores.rest = scores.rest + 25
+        scores.retreat = scores.retreat + 10
+        scores.combat = scores.combat - 15
+    end
+
+
+    -- -----------------------------------------------------
+    -- HUNGER
+    -- -----------------------------------------------------
+
+    if hunger > 50 then
+        scores.gather_resources = scores.gather_resources + 20
+    end
+
+    if hunger > 75 then
+        scores.gather_resources = scores.gather_resources + 20
+        scores.rest = scores.rest + 5
+    end
+
+
+    -- -----------------------------------------------------
+    -- THIRST
+    -- -----------------------------------------------------
+
+    if thirst > 50 then
+        scores.gather_resources = scores.gather_resources + 25
+    end
+
+    if thirst > 75 then
+        scores.gather_resources = scores.gather_resources + 25
+        scores.combat = scores.combat - 10
+    end
+
+
+    -- -----------------------------------------------------
+    -- PANIC
+    -- -----------------------------------------------------
+
+    if panic > 50 then
+        scores.retreat = scores.retreat + 20
+        scores.combat = scores.combat - 10
+    end
+
+    if panic > 75 then
+        scores.retreat = scores.retreat + 30
+        scores.combat = scores.combat - 20
+    end
+
+
+    -- -----------------------------------------------------
+    -- PAIN
+    -- -----------------------------------------------------
+
+    if pain > 30 then
+        scores.heal = scores.heal + 15
+        scores.combat = scores.combat - 10
+    end
+
+    if pain > 60 then
+        scores.heal = scores.heal + 25
+        scores.retreat = scores.retreat + 15
+        scores.combat = scores.combat - 20
+    end
+
+
+    -- -----------------------------------------------------
+    -- ZOMBIE THREAT
+    -- -----------------------------------------------------
+
+    if zombiesNearby >= 5 then
+        scores.combat = scores.combat + 10
+        scores.retreat = scores.retreat + 10
+        scores.guard = scores.guard + 5
+    end
+
+    if zombiesNearby >= 10 then
+        scores.combat = scores.combat + 10
+        scores.retreat = scores.retreat + 20
+    end
+
+    if zombiesNearby >= 20 then
+        scores.retreat = scores.retreat + 30
+        scores.combat = scores.combat + 5
+        scores.explore = scores.explore - 20
+    end
+
+
+    -- -----------------------------------------------------
+    -- WEAPON
+    -- -----------------------------------------------------
+
+    if not hasWeapon then
+        scores.combat = scores.combat - 20
+        scores.gather_resources = scores.gather_resources + 10
+        scores.retreat = scores.retreat + 5
+    end
+
+    if ranged then
+        scores.combat = scores.combat + 5
+    end
+
+
+    -- -----------------------------------------------------
+    -- NIGHT
+    -- -----------------------------------------------------
+
+    if night then
+        scores.guard = scores.guard + 10
+        scores.explore = scores.explore - 15
+        scores.patrol = scores.patrol - 5
+    end
+
+
+    -- -----------------------------------------------------
+    -- Clamp all scores
+    -- -----------------------------------------------------
+
+    for id, score in pairs(scores) do
+        scores[id] = Clamp(score, 0, 100)
+    end
+
+    return scores
+end
+
+
+-- =========================================================
+-- Select best decision
+-- =========================================================
+
+local function SelectBestDecision(scores)
 
     local bestDecision = nil
     local bestScore = -1
     local bestPriority = -1
 
-    for decision, score in pairs(scores) do
+    for _, definition in ipairs(DECISIONS) do
 
-        local priority =
-            BAO.DecisionSystem.Priority[decision] or 0
+        local score =
+            SafeNumber(scores[definition.id], 0)
 
         if score > bestScore then
 
-            bestDecision = decision
+            bestDecision = definition.id
             bestScore = score
-            bestPriority = priority
+            bestPriority = definition.priority
 
-        elseif score == bestScore and priority > bestPriority then
+        elseif score == bestScore then
 
-            bestDecision = decision
-            bestScore = score
-            bestPriority = priority
+            if definition.priority > bestPriority then
+                bestDecision = definition.id
+                bestScore = score
+                bestPriority = definition.priority
+            end
         end
     end
 
     return {
-        Decision = bestDecision,
+        ID = bestDecision,
         Score = bestScore,
         Priority = bestPriority
     }
 end
 
 
---------------------------------------------------
--- PRINT SCORES
---------------------------------------------------
+-- =========================================================
+-- Calculate
+-- =========================================================
 
-function BAO.DecisionSystem.PrintScores(scores)
+function DecisionSystem.Calculate()
 
-    if not scores then
-        Log("Decision scores unavailable")
-        return
-    end
-
-    Log("=== DECISION SCORES ===")
-
-    Log("patrol = " .. Round(scores.patrol))
-    Log("explore = " .. Round(scores.explore))
-    Log("gather_resources = " .. Round(scores.gather_resources))
-    Log("guard = " .. Round(scores.guard))
-    Log("help_ally = " .. Round(scores.help_ally))
-    Log("rest = " .. Round(scores.rest))
-    Log("heal = " .. Round(scores.heal))
-    Log("retreat = " .. Round(scores.retreat))
-    Log("combat = " .. Round(scores.combat))
-end
+    Log("===== DECISION CALCULATION =====")
 
 
---------------------------------------------------
--- PRINT DECISION
---------------------------------------------------
+    local behavior =
+        GetBehaviorProfile()
 
-function BAO.DecisionSystem.PrintDecision(result)
-
-    if not result then
-        Log("No decision selected")
-        return
-    end
-
-    Log("=== PRIMARY DECISION ===")
-    Log("Decision: " .. tostring(result.Decision))
-    Log("Score: " .. Round(result.Score))
-    Log("Priority: " .. tostring(result.Priority))
-end
-
-
---------------------------------------------------
--- CALCULATE CURRENT PLAYER
---------------------------------------------------
-
-function BAO.DecisionSystem.CalculateCurrentPlayer()
-
-    Log("Decision System: CalculateCurrentPlayer started")
-
-    if not BAO.PlayerProfile then
-        Log("DEBUG: BAO.PlayerProfile = NIL")
+    if not behavior then
+        Log("BehaviorProfile unavailable")
         return nil
     end
 
-    Log("DEBUG: BAO.PlayerProfile exists")
+    Log("BehaviorProfile received")
 
-    if not BAO.PlayerProfile.Get then
-        Log("DEBUG: BAO.PlayerProfile.Get = NIL")
-        return nil
+
+    local world =
+        GetWorldContext()
+
+    if world then
+        Log("WorldContext received")
+    else
+        Log("WorldContext unavailable")
     end
 
-    Log("DEBUG: BAO.PlayerProfile.Get exists")
 
-    local playerProfile =
-        BAO.PlayerProfile.Get()
-
-    if not playerProfile then
-        Log("DEBUG: PlayerProfile.Get() returned NIL")
-        return nil
-    end
-
-    Log("DEBUG: PlayerProfile is ready")
-
-    if not BAO.BehaviorProfile then
-        Log("DEBUG: BAO.BehaviorProfile = NIL")
-        return nil
-    end
-
-    Log("DEBUG: BAO.BehaviorProfile exists")
-
-    if not BAO.BehaviorProfile.Get then
-        Log("DEBUG: BAO.BehaviorProfile.Get = NIL")
-        return nil
-    end
-
-    Log("DEBUG: BAO.BehaviorProfile.Get exists")
-
-    local behaviorProfile =
-        BAO.BehaviorProfile.Get()
-
-    if not behaviorProfile then
-        Log("DEBUG: BehaviorProfile.Get() returned NIL")
-        return nil
-    end
-
-    Log("DEBUG: BehaviorProfile is ready")
-
+    -- Base personality/capability scores
     local scores =
-        BAO.DecisionSystem.CalculateScores(
-            behaviorProfile
-        )
+        CalculateBaseScores(behavior)
 
-    if not scores then
-        Log("DEBUG: CalculateScores returned NIL")
-        return nil
+
+    -- Dynamic world modifiers
+    scores =
+        ApplyWorldContext(scores, world)
+
+
+    Log("Decision scores:")
+
+    for _, definition in ipairs(DECISIONS) do
+
+        local score =
+            SafeNumber(scores[definition.id], 0)
+
+        Log(
+            definition.id ..
+            " = " ..
+            string.format("%.2f", score)
+        )
     end
 
-    Log("DEBUG: Decision scores calculated")
 
     local result =
-        BAO.DecisionSystem.SelectBestDecision(
-            scores
+        SelectBestDecision(scores)
+
+
+    if result then
+
+        Log(
+            "FINAL DECISION: " ..
+            tostring(result.ID)
         )
 
-    if not result then
-        Log("DEBUG: SelectBestDecision returned NIL")
-        return nil
+        Log(
+            "FINAL SCORE: " ..
+            string.format("%.2f", result.Score)
+        )
+
+        Log(
+            "FINAL PRIORITY: " ..
+            tostring(result.Priority)
+        )
     end
 
-    Log("DEBUG: Best decision selected")
 
-    BAO.DecisionSystem.LastScores = scores
-    BAO.DecisionSystem.CurrentDecision = result
+    Log("Decision System V1.1 calculation complete")
 
-    return result
+    return {
+        Decision = result,
+        Scores = scores,
+        WorldContext = world,
+        BehaviorProfile = behavior
+    }
 end
 
 
---------------------------------------------------
--- FULL DIAGNOSTIC
---------------------------------------------------
+-- =========================================================
+-- Get
+-- =========================================================
 
-function BAO.DecisionSystem.PrintCurrent()
+function DecisionSystem.Get()
 
-    Log("========================================")
-    Log("=== BAO DECISION SYSTEM V1 DIAGNOSTIC ===")
-    Log("========================================")
-
-    local result =
-        BAO.DecisionSystem.CalculateCurrentPlayer()
-
-    if not result then
-        Log("Decision System diagnostic failed")
-        return
-    end
-
-    BAO.DecisionSystem.PrintScores(
-        BAO.DecisionSystem.LastScores
-    )
-
-    BAO.DecisionSystem.PrintDecision(
-        result
-    )
-
-    Log("========================================")
-    Log("Decision System V1 calculation complete")
-    Log("========================================")
+    return DecisionSystem.Calculate()
 end
 
 
---------------------------------------------------
--- INITIALIZATION
---------------------------------------------------
+-- =========================================================
+-- Initialization
+-- =========================================================
 
-function BAO.DecisionSystem.TryInitialize()
+local initialized = false
+local attempts = 0
 
-    if BAO.DecisionSystem.Initialized then
+local function Initialize()
+
+    if initialized then
         return true
     end
 
-    BAO.DecisionSystem.InitializationAttempts =
-        BAO.DecisionSystem.InitializationAttempts + 1
+    attempts = attempts + 1
 
-    Log(
-        "DEBUG: TryInitialize attempt " ..
-        tostring(
-            BAO.DecisionSystem.InitializationAttempts
-        )
-    )
+    Log("Initialization attempt " .. tostring(attempts))
 
-    if not BAO.PlayerProfile then
-        Log("DEBUG INIT: BAO.PlayerProfile = NIL")
-        return false
-    end
-
-    Log("DEBUG INIT: PlayerProfile exists")
-
-    if not BAO.PlayerProfile.Get then
-        Log("DEBUG INIT: PlayerProfile.Get = NIL")
-        return false
-    end
-
-    Log("DEBUG INIT: PlayerProfile.Get exists")
-
-    local playerProfile =
-        BAO.PlayerProfile.Get()
-
-    if not playerProfile then
-        Log("DEBUG INIT: PlayerProfile.Get() = NIL")
-        return false
-    end
-
-    Log("DEBUG INIT: PlayerProfile ready")
-
-    if not BAO.BehaviorProfile then
-        Log("DEBUG INIT: BehaviorProfile = NIL")
-        return false
-    end
-
-    Log("DEBUG INIT: BehaviorProfile exists")
-
-    if not BAO.BehaviorProfile.Get then
-        Log("DEBUG INIT: BehaviorProfile.Get = NIL")
-        return false
-    end
-
-    Log("DEBUG INIT: BehaviorProfile.Get exists")
 
     local behaviorProfile =
-        BAO.DecisionSystem.GetBehaviorProfile()
+        GetBehaviorProfile()
 
     if not behaviorProfile then
-        Log("DEBUG INIT: BehaviorProfile.Get() = NIL")
+        Log("Waiting for BehaviorProfile...")
         return false
     end
 
-    Log("DEBUG INIT: BehaviorProfile ready")
 
-    BAO.DecisionSystem.Initialized = true
+    local worldContext =
+        GetWorldContext()
 
-    Log("Decision System V1 initialized")
+    if not worldContext then
+        Log("Waiting for WorldContext...")
+        return false
+    end
 
-    BAO.DecisionSystem.PrintCurrent()
+
+    initialized = true
+
+    Log("BehaviorProfile ready")
+    Log("WorldContext ready")
+
+    DecisionSystem.Calculate()
+
+    Log("Decision System V1.1 initialization complete")
 
     return true
 end
 
 
---------------------------------------------------
--- GAME START
---------------------------------------------------
+-- =========================================================
+-- Events
+-- =========================================================
 
 if Events then
 
-    Events.OnGameStart.Add(
-        function()
+    if Events.OnGameStart then
 
-            Log("Decision System V1: OnGameStart")
+        Events.OnGameStart.Add(function()
 
-            Events.OnTick.Add(
-                function()
+            Log("OnGameStart event received")
 
-                    if not BAO.DecisionSystem.Initialized then
-                        BAO.DecisionSystem.TryInitialize()
-                    end
+            Initialize()
 
-                end
-            )
+        end)
 
-        end
-    )
+    end
+
+
+    if Events.OnTick then
+
+        Events.OnTick.Add(function()
+
+            if not initialized then
+                Initialize()
+            end
+
+        end)
+
+    end
 
 end
 
 
---------------------------------------------------
--- MODULE LOADED
---------------------------------------------------
+-- =========================================================
+-- Export
+-- =========================================================
 
-Log("Decision System V1 module loaded")
+BAO.DecisionSystem =
+    DecisionSystem
+
+
+Log("Decision System V1.1 module loaded")

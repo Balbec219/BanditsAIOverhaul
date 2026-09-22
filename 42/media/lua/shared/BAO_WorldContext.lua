@@ -84,7 +84,10 @@ function WorldContext.GetHealth(player)
         return 100
     end
 
-    local health = SafeCall(bodyDamage, "getOverallBodyHealth")
+    local health = SafeCall(
+        bodyDamage,
+        "getOverallBodyHealth"
+    )
 
     return Clamp(health, 0, 100)
 end
@@ -104,7 +107,10 @@ function WorldContext.GetHunger(player)
         return 0
     end
 
-    local hunger = SafeCall(stats, "getHunger")
+    local hunger = SafeCall(
+        stats,
+        "getHunger"
+    )
 
     return Clamp(hunger, 0, 1)
 end
@@ -124,7 +130,10 @@ function WorldContext.GetThirst(player)
         return 0
     end
 
-    local thirst = SafeCall(stats, "getThirst")
+    local thirst = SafeCall(
+        stats,
+        "getThirst"
+    )
 
     return Clamp(thirst, 0, 1)
 end
@@ -144,7 +153,10 @@ function WorldContext.GetFatigue(player)
         return 0
     end
 
-    local fatigue = SafeCall(stats, "getFatigue")
+    local fatigue = SafeCall(
+        stats,
+        "getFatigue"
+    )
 
     return Clamp(fatigue, 0, 1)
 end
@@ -164,7 +176,10 @@ function WorldContext.GetPanic(player)
         return 0
     end
 
-    local panic = SafeCall(stats, "getPanic")
+    local panic = SafeCall(
+        stats,
+        "getPanic"
+    )
 
     return Clamp(panic, 0, 100)
 end
@@ -178,19 +193,26 @@ function WorldContext.GetPain(player)
         return 0
     end
 
-    local bodyDamage = SafeCall(player, "getBodyDamage")
+    local bodyDamage = SafeCall(
+        player,
+        "getBodyDamage"
+    )
 
     if not bodyDamage then
         return 0
     end
 
-    local pain = SafeCall(bodyDamage, "getOverallBodyHealth")
+    local health =
+        SafeCall(
+            bodyDamage,
+            "getOverallBodyHealth"
+        )
 
-    if pain == nil then
+    if health == nil then
         return 0
     end
 
-    return Clamp(100 - pain, 0, 100)
+    return Clamp(100 - health, 0, 100)
 end
 
 --------------------------------------------------
@@ -207,9 +229,17 @@ function WorldContext.GetPosition(player)
     end
 
     return {
-        X = tonumber(SafeCall(player, "getX")) or 0,
-        Y = tonumber(SafeCall(player, "getY")) or 0,
-        Z = tonumber(SafeCall(player, "getZ")) or 0
+        X = tonumber(
+            SafeCall(player, "getX")
+        ) or 0,
+
+        Y = tonumber(
+            SafeCall(player, "getY")
+        ) or 0,
+
+        Z = tonumber(
+            SafeCall(player, "getZ")
+        ) or 0
     }
 end
 
@@ -222,9 +252,10 @@ function WorldContext.IsMoving(player)
         return false
     end
 
-    local moving = SafeCall(player, "isMoving")
-
-    return moving == true
+    return SafeCall(
+        player,
+        "isMoving"
+    ) == true
 end
 
 --------------------------------------------------
@@ -232,6 +263,7 @@ end
 --------------------------------------------------
 
 function WorldContext.GetWeaponState(player)
+
     local result = {
         HasWeapon = false,
         IsRanged = false,
@@ -243,7 +275,11 @@ function WorldContext.GetWeaponState(player)
         return result
     end
 
-    local weapon = SafeCall(player, "getPrimaryHandItem")
+    local weapon =
+        SafeCall(
+            player,
+            "getPrimaryHandItem"
+        )
 
     if not weapon then
         return result
@@ -251,13 +287,22 @@ function WorldContext.GetWeaponState(player)
 
     result.HasWeapon = true
 
-    local weaponType = SafeCall(weapon, "getType")
+    local weaponType =
+        SafeCall(
+            weapon,
+            "getType"
+        )
 
     if weaponType then
-        result.WeaponName = tostring(weaponType)
+        result.WeaponName =
+            tostring(weaponType)
     end
 
-    local isRanged = SafeCall(weapon, "isRanged")
+    local isRanged =
+        SafeCall(
+            weapon,
+            "isRanged"
+        )
 
     if isRanged == true then
         result.IsRanged = true
@@ -270,12 +315,17 @@ end
 -- ZOMBIES
 --------------------------------------------------
 
-function WorldContext.GetNearbyZombieCount(player, radius)
+function WorldContext.GetNearbyZombieCount(
+    player,
+    radius
+)
+
     if not player then
         return 0
     end
 
-    radius = tonumber(radius) or 15
+    radius =
+        tonumber(radius) or 15
 
     local cell = getCell()
 
@@ -283,31 +333,65 @@ function WorldContext.GetNearbyZombieCount(player, radius)
         return 0
     end
 
-    local zombies = SafeCall(cell, "getZombieList")
+    local zombies =
+        SafeCall(
+            cell,
+            "getZombieList"
+        )
 
     if not zombies then
         return 0
     end
 
-    local playerX = tonumber(SafeCall(player, "getX")) or 0
-    local playerY = tonumber(SafeCall(player, "getY")) or 0
+    local playerX =
+        tonumber(
+            SafeCall(player, "getX")
+        ) or 0
+
+    local playerY =
+        tonumber(
+            SafeCall(player, "getY")
+        ) or 0
 
     local count = 0
 
     for i = 0, zombies:size() - 1 do
-        local zombie = zombies:get(i)
+
+        local zombie =
+            zombies:get(i)
 
         if zombie then
-            local zombieX = tonumber(SafeCall(zombie, "getX")) or 0
-            local zombieY = tonumber(SafeCall(zombie, "getY")) or 0
 
-            local dx = zombieX - playerX
-            local dy = zombieY - playerY
+            local zombieX =
+                tonumber(
+                    SafeCall(
+                        zombie,
+                        "getX"
+                    )
+                ) or 0
 
-            local distanceSquared = dx * dx + dy * dy
+            local zombieY =
+                tonumber(
+                    SafeCall(
+                        zombie,
+                        "getY"
+                    )
+                ) or 0
 
-            if distanceSquared <= radius * radius then
-                count = count + 1
+            local dx =
+                zombieX - playerX
+
+            local dy =
+                zombieY - playerY
+
+            local distanceSquared =
+                dx * dx + dy * dy
+
+            if distanceSquared <=
+                radius * radius then
+
+                count =
+                    count + 1
             end
         end
     end
@@ -320,20 +404,35 @@ end
 --------------------------------------------------
 
 function WorldContext.GetTime()
+
     local result = {
         Hour = 0,
         Minutes = 0,
         IsNight = false
     }
 
-    local gameTime = getGameTime()
+    local gameTime =
+        getGameTime()
 
     if not gameTime then
         return result
     end
 
-    result.Hour = tonumber(SafeCall(gameTime, "getHour")) or 0
-    result.Minutes = tonumber(SafeCall(gameTime, "getMinutes")) or 0
+    result.Hour =
+        tonumber(
+            SafeCall(
+                gameTime,
+                "getHour"
+            )
+        ) or 0
+
+    result.Minutes =
+        tonumber(
+            SafeCall(
+                gameTime,
+                "getMinutes"
+            )
+        ) or 0
 
     result.IsNight =
         result.Hour < 6
@@ -343,11 +442,14 @@ function WorldContext.GetTime()
 end
 
 --------------------------------------------------
--- FULL CONTEXT
+-- BUILD CONTEXT
 --------------------------------------------------
 
 function WorldContext.Build(player)
-    player = player or WorldContext.GetPlayer()
+
+    player =
+        player or
+        WorldContext.GetPlayer()
 
     if not player then
         return nil
@@ -355,27 +457,71 @@ function WorldContext.Build(player)
 
     local context = {}
 
-    context.Health = WorldContext.GetHealth(player)
-    context.Hunger = WorldContext.GetHunger(player)
-    context.Thirst = WorldContext.GetThirst(player)
-    context.Fatigue = WorldContext.GetFatigue(player)
-    context.Panic = WorldContext.GetPanic(player)
-    context.Pain = WorldContext.GetPain(player)
+    context.Health =
+        WorldContext.GetHealth(player)
 
-    context.Position = WorldContext.GetPosition(player)
+    context.Hunger =
+        WorldContext.GetHunger(player)
+
+    context.Thirst =
+        WorldContext.GetThirst(player)
+
+    context.Fatigue =
+        WorldContext.GetFatigue(player)
+
+    context.Panic =
+        WorldContext.GetPanic(player)
+
+    context.Pain =
+        WorldContext.GetPain(player)
+
+    context.Position =
+        WorldContext.GetPosition(player)
 
     context.Movement = {
-        IsMoving = WorldContext.IsMoving(player)
+        IsMoving =
+            WorldContext.IsMoving(player)
     }
 
-    context.Weapon = WorldContext.GetWeaponState(player)
+    context.Weapon =
+        WorldContext.GetWeaponState(player)
 
     context.ZombiesNearby =
-        WorldContext.GetNearbyZombieCount(player, 15)
+        WorldContext.GetNearbyZombieCount(
+            player,
+            15
+        )
 
-    context.Time = WorldContext.GetTime()
+    context.Time =
+        WorldContext.GetTime()
 
     return context
+end
+
+--------------------------------------------------
+-- UPDATE
+--------------------------------------------------
+
+function WorldContext.Update()
+
+    local player =
+        WorldContext.GetPlayer()
+
+    if not player then
+        return false
+    end
+
+    local context =
+        WorldContext.Build(player)
+
+    if not context then
+        return false
+    end
+
+    BAO.WorldContext.Current =
+        context
+
+    return true
 end
 
 --------------------------------------------------
@@ -383,6 +529,7 @@ end
 --------------------------------------------------
 
 function WorldContext.Print(context)
+
     if not context then
         Log("Context is nil")
         return
@@ -390,14 +537,38 @@ function WorldContext.Print(context)
 
     Log("===== WORLD CONTEXT =====")
 
-    Log("Health: " .. tostring(context.Health))
-    Log("Hunger: " .. tostring(context.Hunger))
-    Log("Thirst: " .. tostring(context.Thirst))
-    Log("Fatigue: " .. tostring(context.Fatigue))
-    Log("Panic: " .. tostring(context.Panic))
-    Log("Pain: " .. tostring(context.Pain))
+    Log(
+        "Health: "
+        .. tostring(context.Health)
+    )
+
+    Log(
+        "Hunger: "
+        .. tostring(context.Hunger)
+    )
+
+    Log(
+        "Thirst: "
+        .. tostring(context.Thirst)
+    )
+
+    Log(
+        "Fatigue: "
+        .. tostring(context.Fatigue)
+    )
+
+    Log(
+        "Panic: "
+        .. tostring(context.Panic)
+    )
+
+    Log(
+        "Pain: "
+        .. tostring(context.Pain)
+    )
 
     if context.Position then
+
         Log(
             "Position: "
             .. tostring(context.Position.X)
@@ -406,40 +577,63 @@ function WorldContext.Print(context)
             .. ", "
             .. tostring(context.Position.Z)
         )
+
     end
 
     if context.Movement then
+
         Log(
             "Moving: "
-            .. tostring(context.Movement.IsMoving)
+            .. tostring(
+                context.Movement.IsMoving
+            )
         )
+
     end
 
     if context.Weapon then
+
         Log(
             "Weapon: "
-            .. tostring(context.Weapon.WeaponName)
+            .. tostring(
+                context.Weapon.WeaponName
+            )
             .. " | HasWeapon="
-            .. tostring(context.Weapon.HasWeapon)
+            .. tostring(
+                context.Weapon.HasWeapon
+            )
             .. " | Ranged="
-            .. tostring(context.Weapon.IsRanged)
+            .. tostring(
+                context.Weapon.IsRanged
+            )
         )
+
     end
 
     Log(
         "Zombies nearby: "
-        .. tostring(context.ZombiesNearby)
+        .. tostring(
+            context.ZombiesNearby
+        )
     )
 
     if context.Time then
+
         Log(
             "Time: "
-            .. tostring(context.Time.Hour)
+            .. tostring(
+                context.Time.Hour
+            )
             .. ":"
-            .. tostring(context.Time.Minutes)
+            .. tostring(
+                context.Time.Minutes
+            )
             .. " | Night="
-            .. tostring(context.Time.IsNight)
+            .. tostring(
+                context.Time.IsNight
+            )
         )
+
     end
 
     Log("=========================")
@@ -453,6 +647,7 @@ local initialized = false
 local initializationAttempts = 0
 
 function WorldContext.TryInitialize()
+
     if initialized then
         return
     end
@@ -460,36 +655,71 @@ function WorldContext.TryInitialize()
     initializationAttempts =
         initializationAttempts + 1
 
-    local player = WorldContext.GetPlayer()
+    local player =
+        WorldContext.GetPlayer()
 
     if not player then
         return
     end
 
-    local context = WorldContext.Build(player)
+    local context =
+        WorldContext.Build(player)
 
     if not context then
         return
     end
 
-    BAO.WorldContext.Current = context
+    BAO.WorldContext.Current =
+        context
 
     initialized = true
-
-    if Events and Events.OnTick then
-        Events.OnTick.Remove(
-            WorldContext.TryInitialize
-        )
-    end
 
     Log(
         "World Context V1 initialized "
         .. "(attempt "
-        .. tostring(initializationAttempts)
+        .. tostring(
+            initializationAttempts
+        )
         .. ")"
     )
 
     WorldContext.Print(context)
+end
+
+--------------------------------------------------
+-- UPDATE LOOP
+--------------------------------------------------
+
+local updateTimer = 0
+
+local UPDATE_INTERVAL = 180
+
+function WorldContext.OnTick()
+
+    if not initialized then
+        WorldContext.TryInitialize()
+        return
+    end
+
+    updateTimer =
+        updateTimer + 1
+
+    if updateTimer <
+        UPDATE_INTERVAL then
+
+        return
+    end
+
+    updateTimer = 0
+
+    local updated =
+        WorldContext.Update()
+
+    if updated then
+        Log(
+            "World Context updated"
+        )
+    end
 end
 
 --------------------------------------------------
@@ -498,20 +728,40 @@ end
 
 if Events and Events.OnGameStart then
 
-    Events.OnGameStart.Add(function()
+    Events.OnGameStart.Add(
+        function()
 
-        Log("OnGameStart event received")
-        Log("Waiting for player...")
-
-        if Events.OnTick then
-            Events.OnTick.Add(
-                WorldContext.TryInitialize
+            Log(
+                "OnGameStart event received"
             )
+
+            Log(
+                "Waiting for player..."
+            )
+
         end
+    )
 
-    end)
-
-    Log("OnGameStart handler registered")
+    Log(
+        "OnGameStart handler registered"
+    )
 end
 
-Log("World Context V1 module loaded")
+if Events and Events.OnTick then
+
+    Events.OnTick.Add(
+        WorldContext.OnTick
+    )
+
+    Log(
+        "OnTick update handler registered"
+    )
+end
+
+--------------------------------------------------
+-- MODULE LOADED
+--------------------------------------------------
+
+Log(
+    "World Context V1.1 module loaded"
+)
