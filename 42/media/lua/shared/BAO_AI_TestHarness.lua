@@ -1,564 +1,542 @@
--- =========================================================
+-----------------------------------------------------------
 -- BanditsAIOverhaul
 -- BAO_AI_TestHarness.lua
--- AI Test Harness V1.1
+-- AI Test Harness V1.2
 --
--- Purpose:
---   Automated testing of DecisionSystem using artificial
---   WorldContext scenarios.
---
--- V1.1 fixes:
---   - Runs only once
---   - Removes OnTick callback after completion
---   - Prevents duplicate test runs
---   - Prevents infinite test loop
---   - Reduces excessive logging
---   - Does not modify real WorldContext permanently
---   - Tests the real DecisionSystem scoring logic
--- =========================================================
+-- IMPORTANT:
+-- This harness runs ONCE per game session.
+-- It does NOT continuously calculate decisions.
+-----------------------------------------------------------
 
 BAO = BAO or {}
 
-local TestHarness = {}
+-----------------------------------------------------------
+-- GLOBAL DUPLICATE PROTECTION
+-----------------------------------------------------------
 
-local MODULE_NAME = "AI_TestHarness"
+if BAO.__AI_TEST_HARNESS_STARTED then
 
-local function Log(message)
-    print("[BAO][" .. MODULE_NAME .. "] " .. tostring(message))
-end
+    print("[BAO][AI_TestHarness] Duplicate load ignored")
 
+else
 
--- =========================================================
--- Runtime state
--- =========================================================
+    BAO.__AI_TEST_HARNESS_STARTED = true
 
-local initialized = false
-local running = false
-local completed = false
-local testScheduled = false
+    -------------------------------------------------------
+    -- MODULE
+    -------------------------------------------------------
 
-local totalTests = 0
-local passedTests = 0
-local failedTests = 0
+    local TestHarness = {}
 
-local tickHandler = nil
+    local MODULE_NAME = "BAO_AI_TestHarness"
 
+    -------------------------------------------------------
+    -- LOG
+    -------------------------------------------------------
 
--- =========================================================
--- Test scenarios
--- =========================================================
+    local function Log(message)
 
-local TESTS = {
-
-    {
-        id = "NORMAL",
-
-        description = "Normal healthy situation",
-
-        expected = "gather_resources",
-
-        context = {
-            Health = 100,
-            Hunger = 0,
-            Thirst = 0,
-            Fatigue = 0,
-            Panic = 0,
-            Pain = 0,
-            ZombiesNearby = 0,
-            Night = false,
-            HasWeapon = true,
-            Ranged = true
-        }
-    },
-
-
-    {
-        id = "LOW_HEALTH",
-
-        description = "Critically low health",
-
-        expected = "heal",
-
-        context = {
-            Health = 15,
-            Hunger = 0,
-            Thirst = 0,
-            Fatigue = 0,
-            Panic = 0,
-            Pain = 0,
-            ZombiesNearby = 0,
-            Night = false,
-            HasWeapon = true,
-            Ranged = true
-        }
-    },
-
-
-    {
-        id = "HIGH_FATIGUE",
-
-        description = "Extremely tired",
-
-        expected = "rest",
-
-        context = {
-            Health = 100,
-            Hunger = 0,
-            Thirst = 0,
-            Fatigue = 90,
-            Panic = 0,
-            Pain = 0,
-            ZombiesNearby = 0,
-            Night = false,
-            HasWeapon = true,
-            Ranged = true
-        }
-    },
-
-
-    {
-        id = "MANY_ZOMBIES",
-
-        description = "Large zombie group nearby",
-
-        expected = "retreat",
-
-        context = {
-            Health = 100,
-            Hunger = 0,
-            Thirst = 0,
-            Fatigue = 0,
-            Panic = 0,
-            Pain = 0,
-            ZombiesNearby = 25,
-            Night = false,
-            HasWeapon = true,
-            Ranged = true
-        }
-    },
-
-
-    {
-        id = "NIGHT",
-
-        description = "Night time",
-
-        expected = "guard",
-
-        context = {
-            Health = 100,
-            Hunger = 0,
-            Thirst = 0,
-            Fatigue = 0,
-            Panic = 0,
-            Pain = 0,
-            ZombiesNearby = 0,
-            Night = true,
-            HasWeapon = true,
-            Ranged = true
-        }
-    },
-
-
-    {
-        id = "NO_WEAPON",
-
-        description = "No weapon available",
-
-        expected = "gather_resources",
-
-        context = {
-            Health = 100,
-            Hunger = 0,
-            Thirst = 0,
-            Fatigue = 0,
-            Panic = 0,
-            Pain = 0,
-            ZombiesNearby = 0,
-            Night = false,
-            HasWeapon = false,
-            Ranged = false
-        }
-    },
-
-
-    {
-        id = "HUNGRY",
-
-        description = "Very hungry",
-
-        expected = "gather_resources",
-
-        context = {
-            Health = 100,
-            Hunger = 90,
-            Thirst = 0,
-            Fatigue = 0,
-            Panic = 0,
-            Pain = 0,
-            ZombiesNearby = 0,
-            Night = false,
-            HasWeapon = true,
-            Ranged = true
-        }
-    },
-
-
-    {
-        id = "THIRSTY",
-
-        description = "Very thirsty",
-
-        expected = "gather_resources",
-
-        context = {
-            Health = 100,
-            Hunger = 0,
-            Thirst = 90,
-            Fatigue = 0,
-            Panic = 0,
-            Pain = 0,
-            ZombiesNearby = 0,
-            Night = false,
-            HasWeapon = true,
-            Ranged = true
-        }
-    },
-
-
-    {
-        id = "PANIC",
-
-        description = "Extreme panic",
-
-        expected = "retreat",
-
-        context = {
-            Health = 100,
-            Hunger = 0,
-            Thirst = 0,
-            Fatigue = 0,
-            Panic = 100,
-            Pain = 0,
-            ZombiesNearby = 0,
-            Night = false,
-            HasWeapon = true,
-            Ranged = true
-        }
-    }
-}
-
-
--- =========================================================
--- Check dependencies
--- =========================================================
-
-local function DependenciesReady()
-
-    if not BAO.DecisionSystem then
-        return false
-    end
-
-    if not BAO.DecisionSystem.CalculateWithContext then
-        return false
-    end
-
-    if not BAO.BehaviorProfile then
-        return false
-    end
-
-    if not BAO.BehaviorProfile.Get then
-        return false
-    end
-
-    return true
-end
-
-
--- =========================================================
--- Remove OnTick handler
--- =========================================================
-
-local function RemoveTickHandler()
-
-    if tickHandler and Events and Events.OnTick then
-
-        Events.OnTick.Remove(tickHandler)
-
-        tickHandler = nil
-
-        Log("OnTick test handler removed")
-
-    end
-end
-
-
--- =========================================================
--- Run one test
--- =========================================================
-
-local function RunTest(test)
-
-    Log("----------------------------------------")
-    Log("TEST: " .. test.id)
-    Log("Description: " .. test.description)
-
-    local result =
-        BAO.DecisionSystem.CalculateWithContext(
-            test.context
+        print(
+            "[BAO][" .. MODULE_NAME .. "] "
+            .. tostring(message)
         )
 
-
-    if not result then
-
-        Log("Expected: " .. tostring(test.expected))
-        Log("Actual:   nil")
-        Log("RESULT: FAIL")
-
-        failedTests = failedTests + 1
-        totalTests = totalTests + 1
-
-        return
-
     end
 
+    -------------------------------------------------------
+    -- STATE
+    -------------------------------------------------------
 
-    local decision = result.Decision
+    local initialized = false
+    local running = false
+    local completed = false
 
-    local actual =
-        decision and decision.ID or nil
+    local retryTick = 0
 
-    local score =
-        decision and decision.Score or 0
+    local passCount = 0
+    local failCount = 0
+    local totalCount = 0
 
-    local priority =
-        decision and decision.Priority or 0
+    local retryHandler = nil
 
+    -------------------------------------------------------
+    -- TEST DEFINITIONS
+    -------------------------------------------------------
 
-    local passed =
-        actual == test.expected
+    local TESTS = {
 
+        {
+            Name = "NORMAL",
 
-    Log(
-        "Expected: " ..
-        tostring(test.expected)
-    )
+            Expected = "combat",
 
-    Log(
-        "Actual:   " ..
-        tostring(actual)
-    )
+            Context = {
 
-    Log(
-        "Score:    " ..
-        string.format("%.2f", score)
-    )
+                Health = 100,
+                Hunger = 0,
+                Thirst = 0,
+                Fatigue = 0,
+                Panic = 0,
+                Pain = 0,
 
-    Log(
-        "Priority: " ..
-        tostring(priority)
-    )
+                ZombiesNearby = 0,
 
+                Night = false,
 
-    if passed then
+                HasWeapon = true,
+                Ranged = true
+            }
+        },
 
-        Log("RESULT: PASS")
+        {
+            Name = "LOW_HEALTH",
 
-        passedTests = passedTests + 1
+            Expected = "heal",
 
-    else
+            Context = {
 
-        Log("RESULT: FAIL")
+                Health = 20,
+                Hunger = 0,
+                Thirst = 0,
+                Fatigue = 0,
+                Panic = 0,
+                Pain = 0,
 
-        failedTests = failedTests + 1
+                ZombiesNearby = 0,
 
+                Night = false,
+
+                HasWeapon = true,
+                Ranged = true
+            }
+        },
+
+        {
+            Name = "HIGH_FATIGUE",
+
+            Expected = "rest",
+
+            Context = {
+
+                Health = 100,
+                Hunger = 0,
+                Thirst = 0,
+                Fatigue = 90,
+                Panic = 0,
+                Pain = 0,
+
+                ZombiesNearby = 0,
+
+                Night = false,
+
+                HasWeapon = true,
+                Ranged = true
+            }
+        },
+
+        {
+            Name = "MANY_ZOMBIES",
+
+            Expected = "retreat",
+
+            Context = {
+
+                Health = 100,
+                Hunger = 0,
+                Thirst = 0,
+                Fatigue = 0,
+                Panic = 0,
+                Pain = 0,
+
+                ZombiesNearby = 25,
+
+                Night = false,
+
+                HasWeapon = true,
+                Ranged = true
+            }
+        },
+
+        {
+            Name = "NIGHT",
+
+            Expected = "combat",
+
+            Context = {
+
+                Health = 100,
+                Hunger = 0,
+                Thirst = 0,
+                Fatigue = 0,
+                Panic = 0,
+                Pain = 0,
+
+                ZombiesNearby = 0,
+
+                Night = true,
+
+                HasWeapon = true,
+                Ranged = true
+            }
+        },
+
+        {
+            Name = "NO_WEAPON",
+
+            Expected = "gather_resources",
+
+            Context = {
+
+                Health = 100,
+                Hunger = 0,
+                Thirst = 0,
+                Fatigue = 0,
+                Panic = 0,
+                Pain = 0,
+
+                ZombiesNearby = 0,
+
+                Night = false,
+
+                HasWeapon = false,
+                Ranged = false
+            }
+        },
+
+        {
+            Name = "HUNGRY",
+
+            Expected = "gather_resources",
+
+            Context = {
+
+                Health = 100,
+                Hunger = 90,
+                Thirst = 0,
+                Fatigue = 0,
+                Panic = 0,
+                Pain = 0,
+
+                ZombiesNearby = 0,
+
+                Night = false,
+
+                HasWeapon = true,
+                Ranged = true
+            }
+        },
+
+        {
+            Name = "THIRSTY",
+
+            Expected = "gather_resources",
+
+            Context = {
+
+                Health = 100,
+                Hunger = 0,
+                Thirst = 90,
+                Fatigue = 0,
+                Panic = 0,
+                Pain = 0,
+
+                ZombiesNearby = 0,
+
+                Night = false,
+
+                HasWeapon = true,
+                Ranged = true
+            }
+        },
+
+        {
+            Name = "PANIC",
+
+            Expected = "retreat",
+
+            Context = {
+
+                Health = 100,
+                Hunger = 0,
+                Thirst = 0,
+                Fatigue = 0,
+                Panic = 90,
+                Pain = 0,
+
+                ZombiesNearby = 0,
+
+                Night = false,
+
+                HasWeapon = true,
+                Ranged = true
+            }
+        }
+    }
+
+    -------------------------------------------------------
+    -- REMOVE RETRY HANDLER
+    -------------------------------------------------------
+
+    local function RemoveRetryHandler()
+
+        if retryHandler
+        and Events
+        and Events.OnTick then
+
+            Events.OnTick.Remove(retryHandler)
+
+            retryHandler = nil
+
+            Log("Retry OnTick handler removed")
+
+        end
     end
 
+    -------------------------------------------------------
+    -- RUN SINGLE TEST
+    -------------------------------------------------------
 
-    totalTests = totalTests + 1
-end
+    local function RunTest(test)
 
+        totalCount = totalCount + 1
 
--- =========================================================
--- Run all tests
--- =========================================================
+        Log("")
+        Log("--------------------------------------------")
+        Log("TEST #" .. tostring(totalCount) .. ": " .. test.Name)
+        Log("--------------------------------------------")
 
-local function RunAllTests()
+        local DecisionSystem = BAO.DecisionSystem
 
-    if running then
-        return
+        if not DecisionSystem then
+
+            Log("FAIL: DecisionSystem unavailable")
+
+            failCount = failCount + 1
+
+            return
+        end
+
+        if not DecisionSystem.CalculateWithContext then
+
+            Log("FAIL: CalculateWithContext unavailable")
+
+            failCount = failCount + 1
+
+            return
+        end
+
+        local result =
+            DecisionSystem.CalculateWithContext(
+                test.Context
+            )
+
+        if not result then
+
+            Log("FAIL: test returned nil")
+
+            failCount = failCount + 1
+
+            return
+        end
+
+        local actual = result.Decision.ID
+        local score = result.Decision.Score
+        local priority = result.Decision.Priority
+
+        Log(
+            "Expected: "
+            .. tostring(test.Expected)
+        )
+
+        Log(
+            "Actual: "
+            .. tostring(actual)
+        )
+
+        Log(
+            "Score: "
+            .. string.format("%.2f", score)
+        )
+
+        Log(
+            "Priority: "
+            .. tostring(priority)
+        )
+
+        if actual == test.Expected then
+
+            passCount = passCount + 1
+
+            Log("RESULT: PASS")
+
+        else
+
+            failCount = failCount + 1
+
+            Log("RESULT: FAIL")
+
+        end
     end
 
-    if completed then
-        return
-    end
+    -------------------------------------------------------
+    -- RUN ALL TESTS
+    -------------------------------------------------------
 
+    local function RunAllTests()
 
-    if not DependenciesReady() then
+        if running then
 
-        Log("Dependencies are not ready")
+            Log("Test suite already running")
 
-        return
+            return
+        end
 
-    end
+        if completed then
 
+            Log("Test suite already completed")
 
-    running = true
+            return
+        end
 
+        running = true
 
-    Log("")
-    Log("========================================")
-    Log("BAO AI TEST HARNESS V1.1")
-    Log("========================================")
-    Log("Starting Decision System tests...")
-    Log("")
+        passCount = 0
+        failCount = 0
+        totalCount = 0
 
+        Log("")
+        Log("============================================")
+        Log("BAO AI TEST HARNESS V1.2")
+        Log("STARTING TEST SUITE")
+        Log("============================================")
 
-    totalTests = 0
-    passedTests = 0
-    failedTests = 0
+        ---------------------------------------------------
+        -- RUN TESTS ONCE
+        ---------------------------------------------------
 
+        for _, test in ipairs(TESTS) do
 
-    for _, test in ipairs(TESTS) do
-
-        RunTest(test)
-
-    end
-
-
-    Log("")
-    Log("========================================")
-    Log("TEST HARNESS SUMMARY")
-    Log("========================================")
-
-    Log(
-        "Total:  " ..
-        tostring(totalTests)
-    )
-
-    Log(
-        "Passed: " ..
-        tostring(passedTests)
-    )
-
-    Log(
-        "Failed: " ..
-        tostring(failedTests)
-    )
-
-
-    if failedTests == 0 then
-
-        Log("ALL TESTS PASSED")
-
-    else
-
-        Log("SOME TESTS FAILED")
-
-    end
-
-
-    Log("========================================")
-    Log("AI Test Harness V1.1 complete")
-    Log("========================================")
-
-
-    running = false
-    completed = true
-
-    RemoveTickHandler()
-end
-
-
--- =========================================================
--- Delayed execution
---
--- We wait for the normal BAO initialization chain:
---
--- PlayerProfile
---      ↓
--- RoleScoring
---      ↓
--- Specialization
---      ↓
--- BehaviorProfile
---      ↓
--- WorldContext
---      ↓
--- DecisionSystem
---
--- Only then start the tests.
--- =========================================================
-
-local function TryStartTests()
-
-    if completed then
-        return
-    end
-
-    if running then
-        return
-    end
-
-    if testScheduled then
-        return
-    end
-
-
-    if not DependenciesReady() then
-        return
-    end
-
-
-    testScheduled = true
-
-    Log("Dependencies ready")
-    Log("Scheduling AI tests...")
-
-
-    -- Execute on the next tick.
-    --
-    -- This prevents the harness from running in the middle
-    -- of another BAO initialization event.
-
-    if Events and Events.OnTick then
-
-        local oneShotHandler
-
-        oneShotHandler = function()
-
-            if Events and Events.OnTick then
-                Events.OnTick.Remove(oneShotHandler)
-            end
-
-            testScheduled = false
-
-            RunAllTests()
+            RunTest(test)
 
         end
 
-        Events.OnTick.Add(oneShotHandler)
+        ---------------------------------------------------
+        -- SUMMARY
+        ---------------------------------------------------
 
-    else
+        Log("")
+        Log("============================================")
+        Log("TEST SUITE COMPLETE")
+        Log("============================================")
 
-        testScheduled = false
+        Log(
+            "TOTAL: "
+            .. tostring(totalCount)
+        )
+
+        Log(
+            "PASS: "
+            .. tostring(passCount)
+        )
+
+        Log(
+            "FAIL: "
+            .. tostring(failCount)
+        )
+
+        if failCount == 0 then
+
+            Log("STATUS: ALL TESTS PASSED")
+
+        else
+
+            Log("STATUS: SOME TESTS FAILED")
+
+        end
+
+        Log("============================================")
+
+        completed = true
+        running = false
+
+        ---------------------------------------------------
+        -- VERY IMPORTANT
+        -- No more OnTick testing.
+        ---------------------------------------------------
+
+        RemoveRetryHandler()
+
+    end
+
+    -------------------------------------------------------
+    -- CHECK DEPENDENCIES
+    -------------------------------------------------------
+
+    local function DependenciesReady()
+
+        if not BAO.DecisionSystem then
+            return false
+        end
+
+        if not BAO.DecisionSystem.CalculateWithContext then
+            return false
+        end
+
+        if not BAO.BehaviorProfile then
+            return false
+        end
+
+        return true
+    end
+
+    -------------------------------------------------------
+    -- TRY START
+    -------------------------------------------------------
+
+    local function TryStartTests()
+
+        if initialized then
+            return
+        end
+
+        if running then
+            return
+        end
+
+        if completed then
+            return
+        end
+
+        if not DependenciesReady() then
+
+            return
+        end
+
+        initialized = true
+
+        ---------------------------------------------------
+        -- Remove dependency polling BEFORE running tests.
+        ---------------------------------------------------
+
+        RemoveRetryHandler()
+
+        ---------------------------------------------------
+        -- Run exactly once.
+        ---------------------------------------------------
+
         RunAllTests()
 
     end
-end
 
+    -------------------------------------------------------
+    -- GAME START
+    -------------------------------------------------------
 
--- =========================================================
--- Event registration
--- =========================================================
-
-if Events then
-
-    if Events.OnGameStart then
+    if Events and Events.OnGameStart then
 
         Events.OnGameStart.Add(function()
 
-            Log("OnGameStart received")
+            Log("OnGameStart")
 
             TryStartTests()
 
@@ -566,64 +544,110 @@ if Events then
 
     end
 
+    -------------------------------------------------------
+    -- RETRY HANDLER
+    --
+    -- IMPORTANT:
+    -- We DO NOT run tests every tick.
+    -- We only check dependencies once every 60 ticks.
+    -------------------------------------------------------
 
-    if Events.OnTick then
+    if Events and Events.OnTick then
 
-        tickHandler = function()
+        retryHandler = function()
 
-            if completed then
+            if initialized or completed then
 
-                RemoveTickHandler()
+                RemoveRetryHandler()
 
                 return
+            end
+
+            retryTick = retryTick + 1
+
+            if retryTick >= 60 then
+
+                retryTick = 0
+
+                TryStartTests()
 
             end
 
-
-            TryStartTests()
-
         end
 
-
-        Events.OnTick.Add(tickHandler)
+        Events.OnTick.Add(retryHandler)
 
     end
 
+    -------------------------------------------------------
+    -- PUBLIC API
+    -------------------------------------------------------
+
+    function TestHarness.Run()
+
+        if completed then
+
+            Log("Manual Run ignored: suite already completed")
+
+            return false
+        end
+
+        if running then
+
+            Log("Manual Run ignored: suite already running")
+
+            return false
+        end
+
+        if not DependenciesReady() then
+
+            Log("Manual Run failed: dependencies not ready")
+
+            return false
+        end
+
+        initialized = true
+
+        RemoveRetryHandler()
+
+        RunAllTests()
+
+        return true
+    end
+
+    -------------------------------------------------------
+
+    function TestHarness.IsCompleted()
+
+        return completed
+    end
+
+    -------------------------------------------------------
+
+    function TestHarness.GetResults()
+
+        return {
+
+            Total = totalCount,
+
+            Passed = passCount,
+
+            Failed = failCount,
+
+            Completed = completed
+        }
+    end
+
+    -------------------------------------------------------
+    -- EXPORT
+    -------------------------------------------------------
+
+    BAO.AI_TestHarness = TestHarness
+
+    -------------------------------------------------------
+    -- MODULE LOADED
+    -------------------------------------------------------
+
+    Log("AI Test Harness V1.2 module loaded")
+
 end
-
-
--- =========================================================
--- Public API
--- =========================================================
-
-function TestHarness.Run()
-
-    RunAllTests()
-
-end
-
-
-function TestHarness.IsCompleted()
-
-    return completed
-
-end
-
-
-function TestHarness.GetResults()
-
-    return {
-        Total = totalTests,
-        Passed = passedTests,
-        Failed = failedTests,
-        Completed = completed
-    }
-
-end
-
-
-BAO.AI_TestHarness =
-    TestHarness
-
-
-Log("AI Test Harness V1.1 module loaded")
