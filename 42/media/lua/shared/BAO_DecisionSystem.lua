@@ -1,12 +1,17 @@
 -----------------------------------------------------------
 -- BanditsAIOverhaul
 -- BAO_DecisionSystem.lua
--- Decision System V1.2.1
+-- Decision System V1.2.2
 --
--- V1.2.1:
--- - Added CalculateWithContext() for AI Test Harness
--- - Test calculations DO NOT modify runtime decision state
--- - Normal Decision System behavior remains unchanged
+-- V1.2.2:
+-- - Preserved V1.2.1 runtime decision system
+-- - Preserved CalculateWithContext() test isolation
+-- - Added detailed Decision Change state
+-- - Added previous/current decision comparison
+-- - Added old/new score tracking
+-- - Added decision change reason
+-- - Added GetDecisionChange()
+-- - Test calculations do NOT modify runtime state
 -----------------------------------------------------------
 
 BAO = BAO or {}
@@ -80,6 +85,8 @@ local previousDecision = nil
 local lastCalculation = nil
 
 local decisionChanged = false
+
+local lastDecisionChange = nil
 
 local lastWorldContext = nil
 
@@ -586,18 +593,70 @@ local function SelectBestDecision(scores)
 end
 
 -----------------------------------------------------------
+-- CREATE DECISION CHANGE STATE
+-----------------------------------------------------------
+
+local function CreateDecisionChange(
+    oldDecision,
+    newDecision,
+    reason
+)
+
+    local oldID = nil
+    local oldScore = nil
+
+    local newID = nil
+    local newScore = nil
+
+    if oldDecision then
+        oldID = oldDecision.ID
+        oldScore = oldDecision.Score
+    end
+
+    if newDecision then
+        newID = newDecision.ID
+        newScore = newDecision.Score
+    end
+
+    return {
+
+        Changed = oldID ~= newID,
+
+        Previous = oldID,
+
+        Current = newID,
+
+        PreviousScore = oldScore,
+
+        CurrentScore = newScore,
+
+        Reason = reason
+    }
+end
+
+-----------------------------------------------------------
 -- UPDATE RUNTIME DECISION STATE
 -----------------------------------------------------------
 
 local function UpdateDecisionState(result)
 
-    previousDecision = currentDecision
+    -------------------------------------------------------
+    -- INITIAL DECISION
+    -------------------------------------------------------
 
     if currentDecision == nil then
+
+        previousDecision = nil
 
         currentDecision = result
 
         decisionChanged = true
+
+        lastDecisionChange = CreateDecisionChange(
+            nil,
+            result,
+            "initial_decision"
+        )
 
         Log(
             "Initial decision: "
@@ -606,26 +665,56 @@ local function UpdateDecisionState(result)
             .. tostring(result.Score)
         )
 
-    elseif currentDecision.ID ~= result.ID then
+        return
+    end
 
-        Log(
-            "Decision changed: "
-            .. tostring(currentDecision.ID)
-            .. " -> "
-            .. tostring(result.ID)
-        )
+    -------------------------------------------------------
+    -- DECISION CHANGED
+    -------------------------------------------------------
+
+    if currentDecision.ID ~= result.ID then
+
+        local oldDecision = currentDecision
+
+        previousDecision = oldDecision
 
         currentDecision = result
 
         decisionChanged = true
 
-    else
+        lastDecisionChange = CreateDecisionChange(
+            oldDecision,
+            result,
+            "decision_changed"
+        )
 
-        currentDecision = result
+        Log(
+            "Decision changed: "
+            .. tostring(oldDecision.ID)
+            .. " -> "
+            .. tostring(result.ID)
+            .. " | oldScore="
+            .. tostring(oldDecision.Score)
+            .. " newScore="
+            .. tostring(result.Score)
+        )
 
-        decisionChanged = false
-
+        return
     end
+
+    -------------------------------------------------------
+    -- SAME DECISION
+    -------------------------------------------------------
+
+    currentDecision = result
+
+    decisionChanged = false
+
+    lastDecisionChange = CreateDecisionChange(
+        currentDecision,
+        result,
+        "decision_unchanged"
+    )
 end
 
 -----------------------------------------------------------
@@ -706,18 +795,18 @@ end
 -- TEST CALCULATION
 --
 -- IMPORTANT:
--- This function is intentionally isolated from the normal
--- runtime state.
+-- This function does NOT modify runtime decision state.
 --
--- It DOES NOT modify:
+-- It does not modify:
 -- currentDecision
 -- previousDecision
 -- decisionChanged
 -- lastCalculation
 -- lastWorldContext
+-- lastDecisionChange
 --
 -- This allows the AI Test Harness to simulate situations
--- without affecting the real NPC decision state.
+-- safely.
 -----------------------------------------------------------
 
 function DecisionSystem.CalculateWithContext(worldOverride)
@@ -733,7 +822,10 @@ function DecisionSystem.CalculateWithContext(worldOverride)
 
     if not behavior then
 
-        Log("TEST CalculateWithContext: BehaviorProfile unavailable")
+        Log(
+            "TEST CalculateWithContext: "
+            .. "BehaviorProfile unavailable"
+        )
 
         return nil
     end
@@ -748,7 +840,10 @@ function DecisionSystem.CalculateWithContext(worldOverride)
     -- APPLY TEST CONTEXT
     -------------------------------------------------------
 
-    scores = ApplyWorldContext(scores, worldOverride)
+    scores = ApplyWorldContext(
+        scores,
+        worldOverride
+    )
 
     -------------------------------------------------------
     -- SELECT
@@ -762,15 +857,24 @@ function DecisionSystem.CalculateWithContext(worldOverride)
 
     Log(
         "TEST Decision scores: "
-        .. "patrol=" .. string.format("%.2f", scores.patrol)
-        .. " explore=" .. string.format("%.2f", scores.explore)
-        .. " gather=" .. string.format("%.2f", scores.gather_resources)
-        .. " guard=" .. string.format("%.2f", scores.guard)
-        .. " help=" .. string.format("%.2f", scores.help_ally)
-        .. " rest=" .. string.format("%.2f", scores.rest)
-        .. " heal=" .. string.format("%.2f", scores.heal)
-        .. " retreat=" .. string.format("%.2f", scores.retreat)
-        .. " combat=" .. string.format("%.2f", scores.combat)
+        .. "patrol="
+        .. string.format("%.2f", scores.patrol)
+        .. " explore="
+        .. string.format("%.2f", scores.explore)
+        .. " gather="
+        .. string.format("%.2f", scores.gather_resources)
+        .. " guard="
+        .. string.format("%.2f", scores.guard)
+        .. " help="
+        .. string.format("%.2f", scores.help_ally)
+        .. " rest="
+        .. string.format("%.2f", scores.rest)
+        .. " heal="
+        .. string.format("%.2f", scores.heal)
+        .. " retreat="
+        .. string.format("%.2f", scores.retreat)
+        .. " combat="
+        .. string.format("%.2f", scores.combat)
     )
 
     Log(
@@ -844,6 +948,15 @@ function DecisionSystem.HasDecisionChanged()
 end
 
 -----------------------------------------------------------
+-- GET DECISION CHANGE
+-----------------------------------------------------------
+
+function DecisionSystem.GetDecisionChange()
+
+    return lastDecisionChange
+end
+
+-----------------------------------------------------------
 -- GET LAST CALCULATION
 -----------------------------------------------------------
 
@@ -886,7 +999,10 @@ function DecisionSystem.Initialize()
 
     attempts = attempts + 1
 
-    Log("Initialize attempt #" .. tostring(attempts))
+    Log(
+        "Initialize attempt #"
+        .. tostring(attempts)
+    )
 
     local behavior = GetBehaviorProfile()
 
@@ -918,7 +1034,8 @@ function DecisionSystem.Initialize()
     initialized = true
 
     Log(
-        "Decision System initialized. Current decision: "
+        "Decision System initialized. "
+        .. "Current decision: "
         .. tostring(result.Decision.ID)
     )
 
@@ -972,4 +1089,6 @@ BAO.DecisionSystem = DecisionSystem
 -- MODULE LOADED
 -----------------------------------------------------------
 
-Log("Decision System V1.2.1 module loaded")
+Log(
+    "Decision System V1.2.2 module loaded"
+)
