@@ -575,12 +575,21 @@ local function RunTests()
             Navigation.runtime.attempts >= 1
         )
 
-        AssertNotNil(
+        ----------------------------------------------------
+        -- IMPORTANT:
+        -- After Initialize() there is no active navigation
+        -- request yet, so currentNavigation must be nil.
+        --
+        -- There is also no completed/previous navigation,
+        -- so lastNavigation must be nil.
+        ----------------------------------------------------
+
+        AssertNil(
             "Runtime currentNavigation field",
             Navigation.runtime.currentNavigation
         )
 
-        AssertNotNil(
+        AssertNil(
             "Runtime lastNavigation field",
             Navigation.runtime.lastNavigation
         )
