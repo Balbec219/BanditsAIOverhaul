@@ -1,131 +1,140 @@
---[[
-    BanditsAIOverhaul
-    Navigation System V1.0
-
-    Architecture:
-
-        Decision
-            ↓
-        Action
-            ↓
-        ActionExecutor
-            ↓
-        NavigationSystem
-            ↓
-        Project Zomboid PathFindBehavior2
-            ↓
-        NPC movement
-
-    Navigation System is an abstraction layer.
-    BAO AI systems should NOT directly manipulate PathFindBehavior2.
-
-    Build target:
-        Project Zomboid Build 42.20
-]]
+-----------------------------------------------------------
+-- BanditsAIOverhaul
+-- Navigation System V1.1
+--
+-- Real character movement layer.
+--
+-- Architecture:
+-- Decision
+--     ↓
+-- Action
+--     ↓
+-- ActionExecutor
+--     ↓
+-- NavigationSystem
+--     ↓
+-- PathFindBehavior2
+--     ↓
+-- Real character movement
+-----------------------------------------------------------
 
 local NavigationSystem = {}
 
-NavigationSystem.VERSION = "1.0"
+-----------------------------------------------------------
+-- VERSION
+-----------------------------------------------------------
 
---------------------------------------------------
+NavigationSystem.VERSION = "1.1"
+
+-----------------------------------------------------------
 -- STATES
---------------------------------------------------
+-----------------------------------------------------------
 
-NavigationSystem.STATE = {
-    IDLE = "idle",
-    REQUESTED = "requested",
-    PATHFINDING = "pathfinding",
-    MOVING = "moving",
-    ARRIVED = "arrived",
-    FAILED = "failed",
-    CANCELLED = "cancelled"
+NavigationSystem.STATES = {
+    IDLE = "IDLE",
+    REQUESTED = "REQUESTED",
+    PATHFINDING = "PATHFINDING",
+    MOVING = "MOVING",
+    ARRIVED = "ARRIVED",
+    FAILED = "FAILED",
+    CANCELLED = "CANCELLED"
 }
 
---------------------------------------------------
+-----------------------------------------------------------
 -- RESULTS
---------------------------------------------------
+-----------------------------------------------------------
 
-NavigationSystem.RESULT = {
-    SUCCESS = "success",
-    WORKING = "working",
-    FAILED = "failed",
-    CANCELLED = "cancelled"
+NavigationSystem.RESULTS = {
+    SUCCESS = "SUCCESS",
+    WORKING = "WORKING",
+    FAILED = "FAILED",
+    CANCELLED = "CANCELLED"
 }
 
---------------------------------------------------
+-----------------------------------------------------------
 -- TARGET TYPES
---------------------------------------------------
+-----------------------------------------------------------
 
-NavigationSystem.TARGET_TYPE = {
-    LOCATION = "location",
-    CHARACTER = "character",
-    SOUND = "sound"
+NavigationSystem.TARGET_TYPES = {
+    LOCATION = "LOCATION",
+    CHARACTER = "CHARACTER",
+    SOUND = "SOUND"
 }
 
---------------------------------------------------
--- PATHFIND BEHAVIOR RESULTS
---------------------------------------------------
+-----------------------------------------------------------
+-- PATHFINDING RESULTS
+-----------------------------------------------------------
 
-NavigationSystem.PATH_RESULT = {
+NavigationSystem.PATH_RESULTS = {
     WORKING = "Working",
     SUCCEEDED = "Succeeded",
     FAILED = "Failed"
 }
 
---------------------------------------------------
+-----------------------------------------------------------
 -- RUNTIME
---------------------------------------------------
+-----------------------------------------------------------
 
-NavigationSystem.initialized = false
-NavigationSystem.attempts = 0
+NavigationSystem.runtime = {
+    initialized = false,
+    attempts = 0,
 
-NavigationSystem.currentNavigation = nil
-NavigationSystem.lastNavigation = nil
-NavigationSystem.navigationHistory = {}
+    currentNavigation = nil,
+    lastNavigation = nil,
 
-NavigationSystem.maxHistory = 20
-NavigationSystem.nextNavigationId = 1
+    navigationHistory = {},
+    maxHistory = 20,
 
-NavigationSystem.statistics = {
-    requests = 0,
-    started = 0,
-    completed = 0,
-    failed = 0,
-    cancelled = 0
+    nextNavigationId = 1,
+
+    statistics = {
+        requests = 0,
+        started = 0,
+        completed = 0,
+        failed = 0,
+        cancelled = 0
+    }
 }
 
---------------------------------------------------
--- LOGGING
---------------------------------------------------
+-----------------------------------------------------------
+-- LOG
+-----------------------------------------------------------
 
 local function Log(message)
-    print("[BAO][BAO_NavigationSystem] " .. tostring(message))
+    print(
+        "[BAO][BAO_NavigationSystem] "
+        .. tostring(message)
+    )
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- TIME
---------------------------------------------------
+-----------------------------------------------------------
 
 local function GetCurrentTime()
     return os.time() * 1000
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- ID
---------------------------------------------------
+-----------------------------------------------------------
 
 local function GenerateNavigationId()
-    local id = "bao_navigation_" .. tostring(NavigationSystem.nextNavigationId)
+    local id =
+        "bao_navigation_"
+        .. tostring(
+            NavigationSystem.runtime.nextNavigationId
+        )
 
-    NavigationSystem.nextNavigationId =
-        NavigationSystem.nextNavigationId + 1
+    NavigationSystem.runtime.nextNavigationId =
+        NavigationSystem.runtime.nextNavigationId + 1
 
     return id
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- HISTORY
---------------------------------------------------
+-----------------------------------------------------------
 
 local function AddHistory(navigation)
     if not navigation then
@@ -133,119 +142,135 @@ local function AddHistory(navigation)
     end
 
     table.insert(
-        NavigationSystem.navigationHistory,
+        NavigationSystem.runtime.navigationHistory,
         navigation
     )
 
-    while #NavigationSystem.navigationHistory >
-        NavigationSystem.maxHistory do
+    while #NavigationSystem.runtime.navigationHistory
+        > NavigationSystem.runtime.maxHistory do
 
         table.remove(
-            NavigationSystem.navigationHistory,
+            NavigationSystem.runtime.navigationHistory,
             1
         )
     end
 end
 
---------------------------------------------------
--- VALIDATION
---------------------------------------------------
+-----------------------------------------------------------
+-- NUMBER VALIDATION
+-----------------------------------------------------------
 
 local function IsValidNumber(value)
     return type(value) == "number"
 end
+
+-----------------------------------------------------------
+-- CHARACTER VALIDATION
+-----------------------------------------------------------
 
 local function IsValidCharacter(character)
     if character == nil then
         return false
     end
 
-    local characterType = type(character)
+    if type(character) ~= "userdata" then
+        return false
+    end
 
-    return characterType == "userdata"
-        or characterType == "table"
+    if character.getX == nil then
+        return false
+    end
+
+    if character.getY == nil then
+        return false
+    end
+
+    if character.getZ == nil then
+        return false
+    end
+
+    return true
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- TARGET VALIDATION
---------------------------------------------------
+-----------------------------------------------------------
 
-function NavigationSystem.ValidateTarget(targetType, target)
-    if not targetType then
-        return false, "missing_target_type"
+function NavigationSystem.ValidateTarget(target)
+
+    if target == nil then
+        return false
     end
 
-    if targetType == NavigationSystem.TARGET_TYPE.LOCATION then
-
-        if type(target) ~= "table" then
-            return false, "location_target_must_be_table"
-        end
-
-        if not IsValidNumber(target.x)
-            or not IsValidNumber(target.y)
-            or not IsValidNumber(target.z) then
-
-            return false, "location_requires_xyz"
-        end
-
-        return true, nil
+    if target.type == nil then
+        return false
     end
 
-    if targetType == NavigationSystem.TARGET_TYPE.CHARACTER then
+    if target.type == NavigationSystem.TARGET_TYPES.LOCATION then
 
-        if not IsValidCharacter(target) then
-            return false, "invalid_character_target"
-        end
+        return
+            IsValidNumber(target.x)
+            and IsValidNumber(target.y)
+            and IsValidNumber(target.z)
 
-        return true, nil
+    elseif target.type == NavigationSystem.TARGET_TYPES.CHARACTER then
+
+        return IsValidCharacter(target.character)
+
+    elseif target.type == NavigationSystem.TARGET_TYPES.SOUND then
+
+        return
+            IsValidNumber(target.x)
+            and IsValidNumber(target.y)
+            and IsValidNumber(target.z)
     end
 
-    if targetType == NavigationSystem.TARGET_TYPE.SOUND then
-
-        if type(target) ~= "table" then
-            return false, "sound_target_must_be_table"
-        end
-
-        if not IsValidNumber(target.x)
-            or not IsValidNumber(target.y)
-            or not IsValidNumber(target.z) then
-
-            return false, "sound_requires_xyz"
-        end
-
-        return true, nil
-    end
-
-    return false, "unknown_target_type"
+    return false
 end
 
---------------------------------------------------
--- GET PATHFIND BEHAVIOR
---------------------------------------------------
+-----------------------------------------------------------
+-- PATHFIND BEHAVIOR
+-----------------------------------------------------------
 
 function NavigationSystem.GetPathFindBehavior(character)
+
     if not IsValidCharacter(character) then
         return nil
     end
 
-    local success, behavior = pcall(
-        function()
-            return character:getPathFindBehavior2()
-        end
-    )
-
-    if success then
-        return behavior
+    if character.getPathFindBehavior2 == nil then
+        return nil
     end
 
-    return nil
+    local success, behavior =
+        pcall(
+            function()
+                return character:getPathFindBehavior2()
+            end
+        )
+
+    if not success then
+        Log(
+            "GetPathFindBehavior2 failed: "
+            .. tostring(behavior)
+        )
+
+        return nil
+    end
+
+    return behavior
 end
 
---------------------------------------------------
--- CREATE LOCATION TARGET
---------------------------------------------------
+-----------------------------------------------------------
+-- LOCATION TARGET
+-----------------------------------------------------------
 
-function NavigationSystem.CreateLocationTarget(x, y, z)
+function NavigationSystem.CreateLocationTarget(
+    x,
+    y,
+    z
+)
+
     if not IsValidNumber(x)
         or not IsValidNumber(y)
         or not IsValidNumber(z) then
@@ -254,17 +279,41 @@ function NavigationSystem.CreateLocationTarget(x, y, z)
     end
 
     return {
+        type = NavigationSystem.TARGET_TYPES.LOCATION,
+
         x = x,
         y = y,
         z = z
     }
 end
 
---------------------------------------------------
--- CREATE SOUND TARGET
---------------------------------------------------
+-----------------------------------------------------------
+-- CHARACTER TARGET
+-----------------------------------------------------------
 
-function NavigationSystem.CreateSoundTarget(x, y, z)
+function NavigationSystem.CreateCharacterTarget(character)
+
+    if not IsValidCharacter(character) then
+        return nil
+    end
+
+    return {
+        type = NavigationSystem.TARGET_TYPES.CHARACTER,
+
+        character = character
+    }
+end
+
+-----------------------------------------------------------
+-- SOUND TARGET
+-----------------------------------------------------------
+
+function NavigationSystem.CreateSoundTarget(
+    x,
+    y,
+    z
+)
+
     if not IsValidNumber(x)
         or not IsValidNumber(y)
         or not IsValidNumber(z) then
@@ -273,68 +322,71 @@ function NavigationSystem.CreateSoundTarget(x, y, z)
     end
 
     return {
+        type = NavigationSystem.TARGET_TYPES.SOUND,
+
         x = x,
         y = y,
         z = z
     }
 end
 
---------------------------------------------------
--- CREATE NAVIGATION REQUEST
---------------------------------------------------
+-----------------------------------------------------------
+-- REQUEST
+-----------------------------------------------------------
 
 function NavigationSystem.CreateRequest(
     character,
-    targetType,
     target,
     metadata
 )
 
-    local valid, reason =
-        NavigationSystem.ValidateTarget(
-            targetType,
-            target
-        )
+    if not IsValidCharacter(character) then
+        return nil
+    end
 
-    if not valid then
-        return nil, reason
+    if not NavigationSystem.ValidateTarget(target) then
+        return nil
     end
 
     local request = {
-        navigationId = GenerateNavigationId(),
+        id = GenerateNavigationId(),
 
         character = character,
 
-        targetType = targetType,
         target = target,
 
         metadata = metadata or {},
 
-        state = NavigationSystem.STATE.REQUESTED,
+        state = NavigationSystem.STATES.REQUESTED,
+
         result = nil,
 
+        reason = nil,
+
         createdAt = GetCurrentTime(),
+
         startedAt = nil,
+
         completedAt = nil,
 
+        failedAt = nil,
+
+        cancelledAt = nil,
+
         distance = nil,
-        pathLength = nil,
 
-        hasStartedMoving = false,
-        isMoving = false,
-
-        failureReason = nil
+        pathResult = nil
     }
 
-    NavigationSystem.statistics.requests =
-        NavigationSystem.statistics.requests + 1
+    NavigationSystem.runtime.statistics.requests =
+        NavigationSystem.runtime.statistics.requests + 1
 
-    return request, nil
+    return request
 end
 
---------------------------------------------------
--- LOCATION REQUEST
---------------------------------------------------
+-----------------------------------------------------------
+-- REQUEST LOCATION
+-----------------------------------------------------------
 
 function NavigationSystem.RequestLocation(
     character,
@@ -351,21 +403,20 @@ function NavigationSystem.RequestLocation(
             z
         )
 
-    if not target then
-        return nil, "invalid_location"
+    if target == nil then
+        return nil
     end
 
     return NavigationSystem.CreateRequest(
         character,
-        NavigationSystem.TARGET_TYPE.LOCATION,
         target,
         metadata
     )
 end
 
---------------------------------------------------
--- CHARACTER REQUEST
---------------------------------------------------
+-----------------------------------------------------------
+-- REQUEST CHARACTER
+-----------------------------------------------------------
 
 function NavigationSystem.RequestCharacter(
     character,
@@ -373,17 +424,25 @@ function NavigationSystem.RequestCharacter(
     metadata
 )
 
+    local target =
+        NavigationSystem.CreateCharacterTarget(
+            targetCharacter
+        )
+
+    if target == nil then
+        return nil
+    end
+
     return NavigationSystem.CreateRequest(
         character,
-        NavigationSystem.TARGET_TYPE.CHARACTER,
-        targetCharacter,
+        target,
         metadata
     )
 end
 
---------------------------------------------------
--- SOUND REQUEST
---------------------------------------------------
+-----------------------------------------------------------
+-- REQUEST SOUND
+-----------------------------------------------------------
 
 function NavigationSystem.RequestSound(
     character,
@@ -400,35 +459,100 @@ function NavigationSystem.RequestSound(
             z
         )
 
-    if not target then
-        return nil, "invalid_sound_location"
+    if target == nil then
+        return nil
     end
 
     return NavigationSystem.CreateRequest(
         character,
-        NavigationSystem.TARGET_TYPE.SOUND,
         target,
         metadata
     )
 end
 
---------------------------------------------------
+-----------------------------------------------------------
+-- DISTANCE
+-----------------------------------------------------------
+
+function NavigationSystem.GetDistanceToTarget(navigation)
+
+    if navigation == nil then
+        return nil
+    end
+
+    local character = navigation.character
+
+    if not IsValidCharacter(character) then
+        return nil
+    end
+
+    local target = navigation.target
+
+    if target == nil then
+        return nil
+    end
+
+    local targetX = nil
+    local targetY = nil
+    local targetZ = nil
+
+    if target.type == NavigationSystem.TARGET_TYPES.LOCATION
+        or target.type == NavigationSystem.TARGET_TYPES.SOUND then
+
+        targetX = target.x
+        targetY = target.y
+        targetZ = target.z
+
+    elseif target.type == NavigationSystem.TARGET_TYPES.CHARACTER then
+
+        local targetCharacter = target.character
+
+        if not IsValidCharacter(targetCharacter) then
+            return nil
+        end
+
+        targetX = targetCharacter:getX()
+        targetY = targetCharacter:getY()
+        targetZ = targetCharacter:getZ()
+    end
+
+    if targetX == nil
+        or targetY == nil
+        or targetZ == nil then
+
+        return nil
+    end
+
+    local dx = character:getX() - targetX
+    local dy = character:getY() - targetY
+    local dz = character:getZ() - targetZ
+
+    return math.sqrt(
+        dx * dx
+        + dy * dy
+        + dz * dz
+    )
+end
+
+-----------------------------------------------------------
 -- PATH TO LOCATION
---------------------------------------------------
+-----------------------------------------------------------
 
 local function PathToLocation(
-    behavior,
-    target
+    navigation,
+    behavior
 )
 
-    if not behavior then
+    local target = navigation.target
+
+    if target == nil then
         return false
     end
 
-    local success =
+    local success, result =
         pcall(
             function()
-                behavior:pathToLocation(
+                return behavior:pathToLocation(
                     target.x,
                     target.y,
                     target.z
@@ -436,49 +560,100 @@ local function PathToLocation(
             end
         )
 
-    return success
+    if not success then
+
+        navigation.state =
+            NavigationSystem.STATES.FAILED
+
+        navigation.result =
+            NavigationSystem.RESULTS.FAILED
+
+        navigation.reason =
+            "pathToLocation_error"
+
+        navigation.failedAt =
+            GetCurrentTime()
+
+        Log(
+            "pathToLocation failed: "
+            .. tostring(result)
+        )
+
+        return false
+    end
+
+    navigation.pathResult = result
+
+    return true
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- PATH TO CHARACTER
---------------------------------------------------
+-----------------------------------------------------------
 
 local function PathToCharacter(
-    behavior,
-    target
+    navigation,
+    behavior
 )
 
-    if not behavior then
+    local targetCharacter =
+        navigation.target.character
+
+    if not IsValidCharacter(targetCharacter) then
         return false
     end
 
-    local success =
+    local success, result =
         pcall(
             function()
-                behavior:pathToCharacter(target)
+                return behavior:pathToCharacter(
+                    targetCharacter
+                )
             end
         )
 
-    return success
-end
+    if not success then
 
---------------------------------------------------
--- PATH TO SOUND
---------------------------------------------------
+        navigation.state =
+            NavigationSystem.STATES.FAILED
 
-local function PathToSound(
-    behavior,
-    target
-)
+        navigation.result =
+            NavigationSystem.RESULTS.FAILED
 
-    if not behavior then
+        navigation.reason =
+            "pathToCharacter_error"
+
+        navigation.failedAt =
+            GetCurrentTime()
+
+        Log(
+            "pathToCharacter failed: "
+            .. tostring(result)
+        )
+
         return false
     end
 
-    local success =
+    navigation.pathResult = result
+
+    return true
+end
+
+-----------------------------------------------------------
+-- PATH TO SOUND
+-----------------------------------------------------------
+
+local function PathToSound(
+    navigation,
+    behavior
+)
+
+    local target = navigation.target
+
+    local success, result =
         pcall(
             function()
-                behavior:pathToSound(
+                return behavior:pathToSound(
                     target.x,
                     target.y,
                     target.z
@@ -486,23 +661,71 @@ local function PathToSound(
             end
         )
 
-    return success
+    if not success then
+
+        navigation.state =
+            NavigationSystem.STATES.FAILED
+
+        navigation.result =
+            NavigationSystem.RESULTS.FAILED
+
+        navigation.reason =
+            "pathToSound_error"
+
+        navigation.failedAt =
+            GetCurrentTime()
+
+        Log(
+            "pathToSound failed: "
+            .. tostring(result)
+        )
+
+        return false
+    end
+
+    navigation.pathResult = result
+
+    return true
 end
 
---------------------------------------------------
--- START NAVIGATION
---------------------------------------------------
+-----------------------------------------------------------
+-- START
+-----------------------------------------------------------
 
 function NavigationSystem.Start(navigation)
 
-    if not navigation then
-        return false, "missing_navigation"
+    if navigation == nil then
+        return false
     end
 
-    if navigation.state ~=
-        NavigationSystem.STATE.REQUESTED then
+    if not IsValidCharacter(navigation.character) then
 
-        return false, "invalid_navigation_state"
+        navigation.state =
+            NavigationSystem.STATES.FAILED
+
+        navigation.result =
+            NavigationSystem.RESULTS.FAILED
+
+        navigation.reason =
+            "invalid_character"
+
+        return false
+    end
+
+    if not NavigationSystem.ValidateTarget(
+        navigation.target
+    ) then
+
+        navigation.state =
+            NavigationSystem.STATES.FAILED
+
+        navigation.result =
+            NavigationSystem.RESULTS.FAILED
+
+        navigation.reason =
+            "invalid_target"
+
+        return false
     end
 
     local behavior =
@@ -510,156 +733,186 @@ function NavigationSystem.Start(navigation)
             navigation.character
         )
 
-    if not behavior then
+    if behavior == nil then
+
         navigation.state =
-            NavigationSystem.STATE.FAILED
+            NavigationSystem.STATES.FAILED
 
         navigation.result =
-            NavigationSystem.RESULT.FAILED
+            NavigationSystem.RESULTS.FAILED
 
-        navigation.failureReason =
+        navigation.reason =
             "pathfind_behavior_unavailable"
 
-        NavigationSystem.statistics.failed =
-            NavigationSystem.statistics.failed + 1
+        navigation.failedAt =
+            GetCurrentTime()
 
-        return false, navigation.failureReason
-    end
+        Log(
+            "PathFindBehavior2 unavailable"
+        )
 
-    local started = false
-
-    if navigation.targetType ==
-        NavigationSystem.TARGET_TYPE.LOCATION then
-
-        started =
-            PathToLocation(
-                behavior,
-                navigation.target
-            )
-
-    elseif navigation.targetType ==
-        NavigationSystem.TARGET_TYPE.CHARACTER then
-
-        started =
-            PathToCharacter(
-                behavior,
-                navigation.target
-            )
-
-    elseif navigation.targetType ==
-        NavigationSystem.TARGET_TYPE.SOUND then
-
-        started =
-            PathToSound(
-                behavior,
-                navigation.target
-            )
-    end
-
-    if not started then
-        navigation.state =
-            NavigationSystem.STATE.FAILED
-
-        navigation.result =
-            NavigationSystem.RESULT.FAILED
-
-        navigation.failureReason =
-            "path_request_failed"
-
-        NavigationSystem.statistics.failed =
-            NavigationSystem.statistics.failed + 1
-
-        return false, navigation.failureReason
+        return false
     end
 
     navigation.state =
-        NavigationSystem.STATE.PATHFINDING
-
-    navigation.result =
-        NavigationSystem.RESULT.WORKING
+        NavigationSystem.STATES.PATHFINDING
 
     navigation.startedAt =
         GetCurrentTime()
 
-    NavigationSystem.statistics.started =
-        NavigationSystem.statistics.started + 1
+    NavigationSystem.runtime.statistics.started =
+        NavigationSystem.runtime.statistics.started + 1
 
-    NavigationSystem.currentNavigation =
+    local started = false
+
+    if navigation.target.type
+        == NavigationSystem.TARGET_TYPES.LOCATION then
+
+        started =
+            PathToLocation(
+                navigation,
+                behavior
+            )
+
+    elseif navigation.target.type
+        == NavigationSystem.TARGET_TYPES.CHARACTER then
+
+        started =
+            PathToCharacter(
+                navigation,
+                behavior
+            )
+
+    elseif navigation.target.type
+        == NavigationSystem.TARGET_TYPES.SOUND then
+
+        started =
+            PathToSound(
+                navigation,
+                behavior
+            )
+    end
+
+    if not started then
+        return false
+    end
+
+    NavigationSystem.runtime.currentNavigation =
         navigation
 
-    return true, nil
+    return true
 end
 
---------------------------------------------------
--- UPDATE MOVEMENT INFORMATION
---------------------------------------------------
+-----------------------------------------------------------
+-- UPDATE MOVEMENT INFO
+-----------------------------------------------------------
 
 function NavigationSystem.UpdateMovementInfo(
     navigation
 )
 
-    if not navigation then
+    if navigation == nil then
         return
     end
 
-    local character =
-        navigation.character
-
-    if not IsValidCharacter(character) then
-        return
-    end
-
-    local behavior =
-        NavigationSystem.GetPathFindBehavior(
-            character
+    local distance =
+        NavigationSystem.GetDistanceToTarget(
+            navigation
         )
 
-    if not behavior then
+    navigation.distance = distance
+
+    if distance ~= nil
+        and distance <= 1.0 then
+
+        navigation.state =
+            NavigationSystem.STATES.ARRIVED
+
+        navigation.result =
+            NavigationSystem.RESULTS.SUCCESS
+
+        navigation.completedAt =
+            GetCurrentTime()
+
+        NavigationSystem.runtime.statistics.completed =
+            NavigationSystem.runtime.statistics.completed + 1
+
+        NavigationSystem.runtime.lastNavigation =
+            navigation
+
+        AddHistory(navigation)
+
+        NavigationSystem.runtime.currentNavigation =
+            nil
+
+        Log(
+            "Navigation arrived: "
+            .. tostring(navigation.id)
+        )
+
+        return
+    end
+end
+
+-----------------------------------------------------------
+-- UPDATE
+-----------------------------------------------------------
+
+function NavigationSystem.Update()
+
+    local navigation =
+        NavigationSystem.runtime.currentNavigation
+
+    if navigation == nil then
         return
     end
 
-    pcall(
-        function()
+    if navigation.state
+        == NavigationSystem.STATES.CANCELLED then
 
-            navigation.pathLength =
-                behavior:getPathLength()
+        NavigationSystem.runtime.currentNavigation =
+            nil
 
-            navigation.isMoving =
-                behavior:isMovingUsingPathFind()
-
-            navigation.hasStartedMoving =
-                behavior:hasStartedMoving()
-
-        end
-    )
-end
-
---------------------------------------------------
--- UPDATE
---------------------------------------------------
-
-function NavigationSystem.Update(navigation)
-
-    if not navigation then
-        return NavigationSystem.RESULT.FAILED
+        return
     end
 
-    if navigation.state ==
-        NavigationSystem.STATE.CANCELLED then
+    if navigation.state
+        == NavigationSystem.STATES.FAILED then
 
-        return NavigationSystem.RESULT.CANCELLED
+        NavigationSystem.runtime.currentNavigation =
+            nil
+
+        return
     end
 
-    if navigation.state ==
-        NavigationSystem.STATE.COMPLETED then
+    if not IsValidCharacter(
+        navigation.character
+    ) then
 
-        return NavigationSystem.RESULT.SUCCESS
-    end
+        navigation.state =
+            NavigationSystem.STATES.FAILED
 
-    if navigation.state ==
-        NavigationSystem.STATE.FAILED then
+        navigation.result =
+            NavigationSystem.RESULTS.FAILED
 
-        return NavigationSystem.RESULT.FAILED
+        navigation.reason =
+            "character_invalidated"
+
+        navigation.failedAt =
+            GetCurrentTime()
+
+        NavigationSystem.runtime.statistics.failed =
+            NavigationSystem.runtime.statistics.failed + 1
+
+        NavigationSystem.runtime.lastNavigation =
+            navigation
+
+        AddHistory(navigation)
+
+        NavigationSystem.runtime.currentNavigation =
+            nil
+
+        return
     end
 
     local behavior =
@@ -667,184 +920,203 @@ function NavigationSystem.Update(navigation)
             navigation.character
         )
 
-    if not behavior then
+    if behavior == nil then
 
         navigation.state =
-            NavigationSystem.STATE.FAILED
+            NavigationSystem.STATES.FAILED
 
         navigation.result =
-            NavigationSystem.RESULT.FAILED
+            NavigationSystem.RESULTS.FAILED
 
-        navigation.failureReason =
-            "pathfind_behavior_unavailable"
+        navigation.reason =
+            "pathfind_behavior_lost"
 
-        NavigationSystem.statistics.failed =
-            NavigationSystem.statistics.failed + 1
+        navigation.failedAt =
+            GetCurrentTime()
 
-        return NavigationSystem.RESULT.FAILED
+        NavigationSystem.runtime.statistics.failed =
+            NavigationSystem.runtime.statistics.failed + 1
+
+        NavigationSystem.runtime.lastNavigation =
+            navigation
+
+        AddHistory(navigation)
+
+        NavigationSystem.runtime.currentNavigation =
+            nil
+
+        return
     end
+
+    -------------------------------------------------------
+    -- UPDATE PATHFIND BEHAVIOR
+    -------------------------------------------------------
+
+    local success, result =
+        pcall(
+            function()
+                return behavior:update()
+            end
+        )
+
+    if not success then
+
+        navigation.state =
+            NavigationSystem.STATES.FAILED
+
+        navigation.result =
+            NavigationSystem.RESULTS.FAILED
+
+        navigation.reason =
+            "pathfind_update_error"
+
+        navigation.failedAt =
+            GetCurrentTime()
+
+        NavigationSystem.runtime.statistics.failed =
+            NavigationSystem.runtime.statistics.failed + 1
+
+        NavigationSystem.runtime.lastNavigation =
+            navigation
+
+        AddHistory(navigation)
+
+        NavigationSystem.runtime.currentNavigation =
+            nil
+
+        Log(
+            "PathFindBehavior2:update failed: "
+            .. tostring(result)
+        )
+
+        return
+    end
+
+    navigation.pathResult = result
+
+    -------------------------------------------------------
+    -- CHECK DISTANCE
+    -------------------------------------------------------
 
     NavigationSystem.UpdateMovementInfo(
         navigation
     )
 
-    local behaviorResult = nil
+    if navigation.state
+        == NavigationSystem.STATES.ARRIVED then
 
-    pcall(
-        function()
-            behaviorResult =
-                behavior:getResult()
-        end
-    )
+        return
+    end
 
-    if behaviorResult ==
-        NavigationSystem.PATH_RESULT.SUCCEEDED then
+    -------------------------------------------------------
+    -- INTERPRET PATH RESULT
+    -------------------------------------------------------
+
+    local resultString =
+        tostring(result)
+
+    if resultString
+        == NavigationSystem.PATH_RESULTS.SUCCEEDED then
 
         navigation.state =
-            NavigationSystem.STATE.ARRIVED
+            NavigationSystem.STATES.MOVING
+
+    elseif resultString
+        == NavigationSystem.PATH_RESULTS.FAILED then
+
+        navigation.state =
+            NavigationSystem.STATES.FAILED
 
         navigation.result =
-            NavigationSystem.RESULT.SUCCESS
+            NavigationSystem.RESULTS.FAILED
 
-        navigation.completedAt =
+        navigation.reason =
+            "pathfinding_failed"
+
+        navigation.failedAt =
             GetCurrentTime()
 
-        NavigationSystem.lastNavigation =
+        NavigationSystem.runtime.statistics.failed =
+            NavigationSystem.runtime.statistics.failed + 1
+
+        NavigationSystem.runtime.lastNavigation =
             navigation
-
-        NavigationSystem.currentNavigation =
-            nil
-
-        NavigationSystem.statistics.completed =
-            NavigationSystem.statistics.completed + 1
 
         AddHistory(navigation)
 
-        return NavigationSystem.RESULT.SUCCESS
-    end
-
-    if behaviorResult ==
-        NavigationSystem.PATH_RESULT.FAILED then
-
-        navigation.state =
-            NavigationSystem.STATE.FAILED
-
-        navigation.result =
-            NavigationSystem.RESULT.FAILED
-
-        navigation.failureReason =
-            "pathfind_failed"
-
-        navigation.completedAt =
-            GetCurrentTime()
-
-        NavigationSystem.lastNavigation =
-            navigation
-
-        NavigationSystem.currentNavigation =
+        NavigationSystem.runtime.currentNavigation =
             nil
 
-        NavigationSystem.statistics.failed =
-            NavigationSystem.statistics.failed + 1
-
-        AddHistory(navigation)
-
-        return NavigationSystem.RESULT.FAILED
-    end
-
-    if navigation.hasStartedMoving then
-
-        navigation.state =
-            NavigationSystem.STATE.MOVING
     else
+
         navigation.state =
-            NavigationSystem.STATE.PATHFINDING
+            NavigationSystem.STATES.PATHFINDING
     end
-
-    navigation.result =
-        NavigationSystem.RESULT.WORKING
-
-    return NavigationSystem.RESULT.WORKING
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- CANCEL
---------------------------------------------------
+-----------------------------------------------------------
 
-function NavigationSystem.Cancel(
-    navigation,
-    reason
-)
+function NavigationSystem.Cancel(reason)
 
-    if not navigation then
+    local navigation =
+        NavigationSystem.runtime.currentNavigation
+
+    if navigation == nil then
         return false
     end
 
     navigation.state =
-        NavigationSystem.STATE.CANCELLED
+        NavigationSystem.STATES.CANCELLED
 
     navigation.result =
-        NavigationSystem.RESULT.CANCELLED
+        NavigationSystem.RESULTS.CANCELLED
 
-    navigation.failureReason =
+    navigation.reason =
         reason or "cancelled"
 
-    navigation.completedAt =
+    navigation.cancelledAt =
         GetCurrentTime()
 
-    NavigationSystem.lastNavigation =
+    NavigationSystem.runtime.statistics.cancelled =
+        NavigationSystem.runtime.statistics.cancelled + 1
+
+    NavigationSystem.runtime.lastNavigation =
         navigation
 
-    if NavigationSystem.currentNavigation ==
-        navigation then
-
-        NavigationSystem.currentNavigation =
-            nil
-    end
-
-    NavigationSystem.statistics.cancelled =
-        NavigationSystem.statistics.cancelled + 1
-
     AddHistory(navigation)
+
+    NavigationSystem.runtime.currentNavigation =
+        nil
+
+    Log(
+        "Navigation cancelled: "
+        .. tostring(navigation.id)
+    )
 
     return true
 end
 
---------------------------------------------------
--- GET CURRENT
---------------------------------------------------
+-----------------------------------------------------------
+-- GETTERS
+-----------------------------------------------------------
 
 function NavigationSystem.GetCurrentNavigation()
-    return NavigationSystem.currentNavigation
+    return NavigationSystem.runtime.currentNavigation
 end
-
---------------------------------------------------
--- GET LAST
---------------------------------------------------
 
 function NavigationSystem.GetLastNavigation()
-    return NavigationSystem.lastNavigation
+    return NavigationSystem.runtime.lastNavigation
 end
-
---------------------------------------------------
--- GET HISTORY
---------------------------------------------------
 
 function NavigationSystem.GetNavigationHistory()
-    return NavigationSystem.navigationHistory
+    return NavigationSystem.runtime.navigationHistory
 end
-
---------------------------------------------------
--- GET STATISTICS
---------------------------------------------------
 
 function NavigationSystem.GetStatistics()
-    return NavigationSystem.statistics
+    return NavigationSystem.runtime.statistics
 end
-
---------------------------------------------------
--- GET STATUS
---------------------------------------------------
 
 function NavigationSystem.GetStatus()
 
@@ -852,37 +1124,44 @@ function NavigationSystem.GetStatus()
         version = NavigationSystem.VERSION,
 
         initialized =
-            NavigationSystem.initialized,
+            NavigationSystem.runtime.initialized,
 
         attempts =
-            NavigationSystem.attempts,
+            NavigationSystem.runtime.attempts,
 
         currentNavigation =
-            NavigationSystem.currentNavigation,
+            NavigationSystem.runtime.currentNavigation,
 
         lastNavigation =
-            NavigationSystem.lastNavigation,
+            NavigationSystem.runtime.lastNavigation,
 
         historyCount =
-            #NavigationSystem.navigationHistory,
+            #NavigationSystem.runtime.navigationHistory,
 
         statistics =
-            NavigationSystem.statistics
+            NavigationSystem.runtime.statistics
     }
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- RESET
---------------------------------------------------
+-----------------------------------------------------------
 
 function NavigationSystem.Reset()
 
-    NavigationSystem.currentNavigation = nil
-    NavigationSystem.lastNavigation = nil
+    NavigationSystem.runtime.currentNavigation =
+        nil
 
-    NavigationSystem.navigationHistory = {}
+    NavigationSystem.runtime.lastNavigation =
+        nil
 
-    NavigationSystem.statistics = {
+    NavigationSystem.runtime.navigationHistory =
+        {}
+
+    NavigationSystem.runtime.nextNavigationId =
+        1
+
+    NavigationSystem.runtime.statistics = {
         requests = 0,
         started = 0,
         completed = 0,
@@ -890,28 +1169,28 @@ function NavigationSystem.Reset()
         cancelled = 0
     }
 
-    NavigationSystem.nextNavigationId = 1
+    NavigationSystem.runtime.initialized =
+        false
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- INITIALIZE
---------------------------------------------------
+-----------------------------------------------------------
 
 function NavigationSystem.Initialize()
 
-    NavigationSystem.attempts =
-        NavigationSystem.attempts + 1
+    NavigationSystem.runtime.attempts =
+        NavigationSystem.runtime.attempts + 1
 
     Log(
         "Initialize attempt #"
-        .. tostring(NavigationSystem.attempts)
+        .. tostring(
+            NavigationSystem.runtime.attempts
+        )
     )
 
-    if NavigationSystem.initialized then
-        return true
-    end
-
-    NavigationSystem.initialized = true
+    NavigationSystem.runtime.initialized =
+        true
 
     Log(
         "Navigation System initialized V"
@@ -921,54 +1200,43 @@ function NavigationSystem.Initialize()
     return true
 end
 
---------------------------------------------------
+-----------------------------------------------------------
 -- GAME START
---------------------------------------------------
+-----------------------------------------------------------
 
-if Events and Events.OnGameStart then
+if Events then
 
     Events.OnGameStart.Add(
         function()
 
             Log("OnGameStart")
 
-            NavigationSystem.Initialize()
-
+            if not NavigationSystem.runtime.initialized then
+                NavigationSystem.Initialize()
+            end
         end
     )
 
+    -------------------------------------------------------
+    -- TICK
+    -------------------------------------------------------
+
+    if Events.OnTick then
+
+        Events.OnTick.Add(
+            function()
+
+                if NavigationSystem.runtime.initialized then
+                    NavigationSystem.Update()
+                end
+            end
+        )
+    end
 end
 
---------------------------------------------------
--- TICK
---------------------------------------------------
-
-if Events and Events.OnTick then
-
-    Events.OnTick.Add(
-        function()
-
-            if not NavigationSystem.initialized then
-                return
-            end
-
-            local navigation =
-                NavigationSystem.currentNavigation
-
-            if navigation then
-                NavigationSystem.Update(
-                    navigation
-                )
-            end
-
-        end
-    )
-
-end
-
---------------------------------------------------
+-----------------------------------------------------------
 -- EXPORT
---------------------------------------------------
+-----------------------------------------------------------
 
 BAO = BAO or {}
 
@@ -980,5 +1248,3 @@ Log(
     .. NavigationSystem.VERSION
     .. " module loaded"
 )
-
-return NavigationSystem
