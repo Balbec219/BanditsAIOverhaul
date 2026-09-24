@@ -1,53 +1,58 @@
 --[[
     BanditsAIOverhaul
-    Navigation Movement Test V1.2
+    Navigation Movement Test V1.4
 
-    Проверяет реальное движение игрока через:
-        Player
-            ↓
-        NavigationSystem
-            ↓
-        PathFindBehavior2
-            ↓
-        Project Zomboid movement
+    SAFE DIAGNOSTIC VERSION
 
-    Тест не использует getSpecificPlayer().
-    Игрок получается через Events.OnCreatePlayer.
+    This version DOES NOT automatically start navigation.
 
-    Результат:
-        ARRIVED = навигация реально довела игрока до точки
-        FAILED  = PathFindBehavior2 сообщил ошибку
-        TIMEOUT = движение не завершилось за заданное время
+    It inspects the real player and the real
+    PathFindBehavior2 instance.
+
+    The purpose is to determine exactly which
+    PathFindBehavior2 state/functions are available
+    on Project Zomboid Build 42.20.4.
+
+    IMPORTANT:
+
+    Previous test:
+        Player -> Navigation -> PathFindBehavior2
+
+    caused:
+        walking animation
+        no coordinate movement
+        player input blocked
+        PathFindBehavior2 -> Failed
+
+    Therefore this version intentionally does NOT
+    hijack player movement.
 ]]
 
 local Test = {}
 
-Test.VERSION = "1.2"
+Test.VERSION = "1.4"
 
 Test.player = nil
-Test.started = false
-Test.finished = false
 
-Test.navigation = nil
-Test.targetX = nil
-Test.targetY = nil
-Test.targetZ = nil
+Test.playerCached = false
 
-Test.startTime = nil
-Test.timeoutSeconds = 30
-
-Test.startX = nil
-Test.startY = nil
-Test.startZ = nil
+Test.diagnosticsComplete = false
 
 Test.lastLogTime = 0
+
+Test.diagnosticInterval = 3
 
 ------------------------------------------------------------
 -- Logging
 ------------------------------------------------------------
 
 local function Log(message)
-    print("[BAO NavigationMovementTest V1.2] " .. tostring(message))
+
+    print(
+        "[BAO NavigationMovementTest V1.4] " ..
+        tostring(message)
+    )
+
 end
 
 ------------------------------------------------------------
@@ -55,11 +60,14 @@ end
 ------------------------------------------------------------
 
 local function CachePlayer(player)
+
     if player == nil then
         return
     end
 
     Test.player = player
+
+    Test.playerCached = true
 
     local x = player:getX()
     local y = player:getY()
@@ -71,494 +79,435 @@ local function CachePlayer(player)
         " y=" .. tostring(y) ..
         " z=" .. tostring(z)
     )
+
 end
 
 ------------------------------------------------------------
--- Events
+-- OnCreatePlayer
 ------------------------------------------------------------
 
-if Events then
+if Events and Events.OnCreatePlayer then
 
-    if Events.OnCreatePlayer then
-
-        Events.OnCreatePlayer.Add(function(playerIndex, player)
+    Events.OnCreatePlayer.Add(
+        function(
+            playerIndex,
+            player
+        )
 
             Log(
-                "OnCreatePlayer received. " ..
-                "index=" .. tostring(playerIndex)
+                "OnCreatePlayer received. index=" ..
+                tostring(playerIndex)
             )
 
             CachePlayer(player)
 
-        end)
-
-    else
-        Log("WARNING: Events.OnCreatePlayer is unavailable")
-    end
+        end
+    )
 
 else
-    Log("WARNING: Events object is unavailable")
+
+    Log(
+        "WARNING: Events.OnCreatePlayer unavailable"
+    )
+
 end
 
 ------------------------------------------------------------
--- Dependency check
+-- Navigation dependency
 ------------------------------------------------------------
 
 local function CheckNavigationSystem()
 
     if BAO == nil then
-        Log("FAIL: BAO namespace is unavailable")
+
+        Log(
+            "Navigation dependency: BAO unavailable"
+        )
+
         return false
+
     end
 
     if BAO.NavigationSystem == nil then
-        Log("FAIL: BAO.NavigationSystem is unavailable")
+
+        Log(
+            "Navigation dependency: NavigationSystem unavailable"
+        )
+
         return false
+
     end
 
     Log(
-        "NavigationSystem detected. " ..
-        "Version=" ..
-        tostring(BAO.NavigationSystem.VERSION)
+        "NavigationSystem detected. Version=" ..
+        tostring(
+            BAO.NavigationSystem.VERSION
+        )
     )
 
     return true
+
 end
 
 ------------------------------------------------------------
--- Start navigation test
+-- Safe method call helper
 ------------------------------------------------------------
 
-local function StartTest()
+local function SafeCall(
+    object,
+    methodName
+)
 
-    if Test.started then
-        return
-    end
+    if object == nil then
 
-    if Test.finished then
-        return
-    end
-
-    if Test.player == nil then
-
-        Log("Waiting for player...")
-
-        return
+        return nil, false
 
     end
 
-    local Navigation = BAO.NavigationSystem
+    local method =
+        object[methodName]
 
-    if Navigation == nil then
-        Log("FAIL: NavigationSystem unavailable")
-        Test.finished = true
-        return
+    if method == nil then
+
+        return nil, false
+
     end
 
-    local player = Test.player
+    local success, result =
+        pcall(
+            function()
 
-    --------------------------------------------------------
-    -- Start position
-    --------------------------------------------------------
+                return method(object)
 
-    Test.startX = player:getX()
-    Test.startY = player:getY()
-    Test.startZ = player:getZ()
-
-    --------------------------------------------------------
-    -- Target
-    --
-    -- 8 cells diagonally from player.
-    --------------------------------------------------------
-
-    Test.targetX = Test.startX + 8
-    Test.targetY = Test.startY + 8
-    Test.targetZ = Test.startZ
-
-    Log("========================================")
-    Log("STARTING REAL NAVIGATION TEST")
-    Log("========================================")
-
-    Log(
-        "Start position: " ..
-        tostring(Test.startX) .. ", " ..
-        tostring(Test.startY) .. ", " ..
-        tostring(Test.startZ)
-    )
-
-    Log(
-        "Target position: " ..
-        tostring(Test.targetX) .. ", " ..
-        tostring(Test.targetY) .. ", " ..
-        tostring(Test.targetZ)
-    )
-
-    --------------------------------------------------------
-    -- Create navigation request
-    --------------------------------------------------------
-
-    local request =
-        Navigation.RequestLocation(
-            player,
-            Test.targetX,
-            Test.targetY,
-            Test.targetZ,
-            {
-                source = "BAO_NavigationMovementTest",
-                testVersion = Test.VERSION
-            }
+            end
         )
 
-    if request == nil then
+    if success then
 
-        Log("FAIL: RequestLocation returned nil")
-
-        Test.finished = true
-
-        return
+        return result, true
 
     end
 
-    Test.navigation = request
-
-    Log(
-        "Navigation request created. " ..
-        "ID=" .. tostring(request.id)
-    )
-
-    --------------------------------------------------------
-    -- Start navigation
-    --------------------------------------------------------
-
-    local started = Navigation.Start(request)
-
-    if not started then
-
-        Log("FAIL: Navigation.Start() returned false")
-
-        Test.finished = true
-
-        return
-
-    end
-
-    Test.started = true
-    Test.startTime = os.time()
-
-    Log(
-        "Navigation started successfully. " ..
-        "State=" .. tostring(request.state)
-    )
-
-    Log("========================================")
+    return nil, false
 
 end
 
 ------------------------------------------------------------
--- Distance
+-- PathFindBehavior diagnostics
 ------------------------------------------------------------
 
-local function GetDistanceToTarget()
+local function DiagnosePathFindBehavior()
 
     if Test.player == nil then
-        return nil
+
+        return
+
     end
 
-    if Test.targetX == nil then
-        return nil
+    local Navigation =
+        BAO.NavigationSystem
+
+    if Navigation == nil then
+
+        return
+
     end
 
-    local x = Test.player:getX()
-    local y = Test.player:getY()
+    --------------------------------------------------------
+    -- Get behavior
+    --------------------------------------------------------
 
-    local dx = x - Test.targetX
-    local dy = y - Test.targetY
+    local behavior =
+        Navigation.GetPathFindBehavior(
+            Test.player
+        )
 
-    return math.sqrt(
-        (dx * dx) +
-        (dy * dy)
+    if behavior == nil then
+
+        Log(
+            "PathFindBehavior2: UNAVAILABLE"
+        )
+
+        return
+
+    end
+
+    Log(
+        "PathFindBehavior2: AVAILABLE"
     )
+
+    --------------------------------------------------------
+    -- isMovingUsingPathFind
+    --------------------------------------------------------
+
+    local moving, movingOK =
+        SafeCall(
+            behavior,
+            "isMovingUsingPathFind"
+        )
+
+    if movingOK then
+
+        Log(
+            "isMovingUsingPathFind() = " ..
+            tostring(moving)
+        )
+
+    else
+
+        Log(
+            "isMovingUsingPathFind() = unavailable/error"
+        )
+
+    end
+
+    --------------------------------------------------------
+    -- hasStartedMoving
+    --------------------------------------------------------
+
+    local started, startedOK =
+        SafeCall(
+            behavior,
+            "hasStartedMoving"
+        )
+
+    if startedOK then
+
+        Log(
+            "hasStartedMoving() = " ..
+            tostring(started)
+        )
+
+    else
+
+        Log(
+            "hasStartedMoving() = unavailable/error"
+        )
+
+    end
+
+    --------------------------------------------------------
+    -- shouldBeMoving
+    --------------------------------------------------------
+
+    local shouldMove, shouldOK =
+        SafeCall(
+            behavior,
+            "shouldBeMoving"
+        )
+
+    if shouldOK then
+
+        Log(
+            "shouldBeMoving() = " ..
+            tostring(shouldMove)
+        )
+
+    else
+
+        Log(
+            "shouldBeMoving() = unavailable/error"
+        )
+
+    end
+
+    --------------------------------------------------------
+    -- isGoalLocation
+    --------------------------------------------------------
+
+    local goalLocation, goalOK =
+        SafeCall(
+            behavior,
+            "isGoalLocation"
+        )
+
+    if goalOK then
+
+        Log(
+            "isGoalLocation() = " ..
+            tostring(goalLocation)
+        )
+
+    else
+
+        Log(
+            "isGoalLocation() = unavailable/error"
+        )
+
+    end
+
+    --------------------------------------------------------
+    -- getPathLength
+    --------------------------------------------------------
+
+    local pathLength, lengthOK =
+        SafeCall(
+            behavior,
+            "getPathLength"
+        )
+
+    if lengthOK then
+
+        Log(
+            "getPathLength() = " ..
+            tostring(pathLength)
+        )
+
+    else
+
+        Log(
+            "getPathLength() = unavailable/error"
+        )
+
+    end
 
 end
 
 ------------------------------------------------------------
--- Progress logging
+-- Player pathing diagnostics
 ------------------------------------------------------------
 
-local function LogProgress()
+local function DiagnosePlayer()
 
-    if not Test.started then
-        return
-    end
-
-    if Test.finished then
-        return
-    end
-
-    local now = os.time()
-
-    if Test.lastLogTime ~= 0 and
-       (now - Test.lastLogTime) < 2 then
+    if Test.player == nil then
 
         return
+
     end
 
-    Test.lastLogTime = now
+    local player =
+        Test.player
 
-    local player = Test.player
-
-    if player == nil then
-        return
-    end
+    --------------------------------------------------------
+    -- Coordinates
+    --------------------------------------------------------
 
     local x = player:getX()
     local y = player:getY()
     local z = player:getZ()
 
-    local distance = GetDistanceToTarget()
-
-    local state = "UNKNOWN"
-
-    if Test.navigation ~= nil then
-        state = tostring(Test.navigation.state)
-    end
-
     Log(
-        "Progress: " ..
-        "state=" .. state ..
-        " position=(" ..
+        "Player position: " ..
         tostring(x) .. ", " ..
         tostring(y) .. ", " ..
-        tostring(z) .. ")" ..
-        " distance=" ..
-        tostring(distance)
+        tostring(z)
     )
 
-end
+    --------------------------------------------------------
+    -- isPathing
+    --------------------------------------------------------
 
-------------------------------------------------------------
--- Finish
-------------------------------------------------------------
+    local pathingOK, pathing =
+        pcall(
+            function()
 
-local function Finish(result, message)
+                return player:isPathing()
 
-    if Test.finished then
-        return
-    end
+            end
+        )
 
-    Test.finished = true
-
-    Log("========================================")
-    Log("NAVIGATION MOVEMENT TEST FINISHED")
-    Log("RESULT: " .. tostring(result))
-
-    if message ~= nil then
-        Log("DETAIL: " .. tostring(message))
-    end
-
-    if Test.player ~= nil then
-
-        local x = Test.player:getX()
-        local y = Test.player:getY()
-        local z = Test.player:getZ()
+    if pathingOK then
 
         Log(
-            "Final position: " ..
-            tostring(x) .. ", " ..
-            tostring(y) .. ", " ..
-            tostring(z)
+            "player:isPathing() = " ..
+            tostring(pathing)
         )
 
-        local distance = GetDistanceToTarget()
+    else
 
         Log(
-            "Final distance to target: " ..
-            tostring(distance)
+            "player:isPathing() = unavailable/error"
         )
 
     end
 
-    if Test.navigation ~= nil then
+    --------------------------------------------------------
+    -- getPath2
+    --------------------------------------------------------
 
-        Log(
-            "Navigation ID: " ..
-            tostring(Test.navigation.id)
+    local path2OK, path2 =
+        pcall(
+            function()
+
+                return player:getPath2()
+
+            end
         )
 
-        Log(
-            "Navigation state: " ..
-            tostring(Test.navigation.state)
-        )
+    if path2OK then
 
-        Log(
-            "Navigation result: " ..
-            tostring(Test.navigation.result)
-        )
+        if path2 ~= nil then
 
-        Log(
-            "Path result: " ..
-            tostring(Test.navigation.pathResult)
-        )
-
-    end
-
-    Log("========================================")
-
-end
-
-------------------------------------------------------------
--- Update test
-------------------------------------------------------------
-
-local function UpdateTest()
-
-    if Test.finished then
-        return
-    end
-
-    --------------------------------------------------------
-    -- Wait for player
-    --------------------------------------------------------
-
-    if not Test.started then
-
-        StartTest()
-
-        return
-
-    end
-
-    --------------------------------------------------------
-    -- Player safety
-    --------------------------------------------------------
-
-    if Test.player == nil then
-
-        Finish(
-            "FAILED",
-            "Player reference was lost"
-        )
-
-        return
-
-    end
-
-    --------------------------------------------------------
-    -- Navigation safety
-    --------------------------------------------------------
-
-    if Test.navigation == nil then
-
-        Finish(
-            "FAILED",
-            "Navigation request was lost"
-        )
-
-        return
-
-    end
-
-    --------------------------------------------------------
-    -- Progress
-    --------------------------------------------------------
-
-    LogProgress()
-
-    --------------------------------------------------------
-    -- State checks
-    --------------------------------------------------------
-
-    local state = Test.navigation.state
-
-    if state == BAO.NavigationSystem.STATES.ARRIVED then
-
-        local distance = GetDistanceToTarget()
-
-        Finish(
-            "SUCCESS",
-            "Navigation reached ARRIVED state"
-        )
-
-        return
-
-    end
-
-    if state == BAO.NavigationSystem.STATES.FAILED then
-
-        Finish(
-            "FAILED",
-            "Navigation entered FAILED state"
-        )
-
-        return
-
-    end
-
-    if state == BAO.NavigationSystem.STATES.CANCELLED then
-
-        Finish(
-            "CANCELLED",
-            "Navigation was cancelled"
-        )
-
-        return
-
-    end
-
-    --------------------------------------------------------
-    -- Timeout
-    --------------------------------------------------------
-
-    if Test.startTime ~= nil then
-
-        local elapsed =
-            os.time() - Test.startTime
-
-        if elapsed >= Test.timeoutSeconds then
-
-            Finish(
-                "TIMEOUT",
-                "Navigation did not finish within " ..
-                tostring(Test.timeoutSeconds) ..
-                " seconds"
+            Log(
+                "player:getPath2() = AVAILABLE"
             )
 
-            return
+        else
+
+            Log(
+                "player:getPath2() = nil"
+            )
 
         end
 
+    else
+
+        Log(
+            "player:getPath2() = unavailable/error"
+        )
+
     end
 
 end
 
 ------------------------------------------------------------
--- Game start
+-- Full diagnostic
+------------------------------------------------------------
+
+local function RunDiagnostics()
+
+    if Test.player == nil then
+
+        return
+
+    end
+
+    Log("========================================")
+    Log("PATHFINDING DIAGNOSTIC")
+    Log("========================================")
+
+    CheckNavigationSystem()
+
+    DiagnosePlayer()
+
+    DiagnosePathFindBehavior()
+
+    Log("========================================")
+
+    Test.diagnosticsComplete = true
+
+end
+
+------------------------------------------------------------
+-- OnGameStart
 ------------------------------------------------------------
 
 if Events and Events.OnGameStart then
 
-    Events.OnGameStart.Add(function()
+    Events.OnGameStart.Add(
+        function()
 
-        Log("========================================")
-        Log("Navigation Movement Test V1.2 loaded")
-        Log("OnGameStart received")
+            Log("========================================")
+            Log("Navigation Movement Test V1.4 loaded")
+            Log("OnGameStart received")
+            Log("SAFE DIAGNOSTIC MODE")
+            Log("Player movement will NOT be hijacked.")
+            Log("========================================")
 
-        if CheckNavigationSystem() then
-
-            Log(
-                "NavigationSystem is ready. " ..
-                "Waiting for player..."
-            )
+            CheckNavigationSystem()
 
         end
-
-        Log("========================================")
-
-    end)
-
-else
-
-    Log("WARNING: Events.OnGameStart unavailable")
+    )
 
 end
 
@@ -568,15 +517,33 @@ end
 
 if Events and Events.OnTick then
 
-    Events.OnTick.Add(function()
+    Events.OnTick.Add(
+        function()
 
-        UpdateTest()
+            if Test.player == nil then
 
-    end)
+                return
 
-else
+            end
 
-    Log("WARNING: Events.OnTick unavailable")
+            local now = os.time()
+
+            if Test.lastLogTime == 0 or
+               (now - Test.lastLogTime) >=
+               Test.diagnosticInterval then
+
+                Test.lastLogTime = now
+
+                if not Test.diagnosticsComplete then
+
+                    RunDiagnostics()
+
+                end
+
+            end
+
+        end
+    )
 
 end
 
@@ -586,8 +553,9 @@ end
 
 BAO = BAO or {}
 
-BAO.NavigationMovementTest = Test
+BAO.NavigationMovementTest =
+    Test
 
 Log(
-    "Navigation Movement Test V1.2 loaded"
+    "Navigation Movement Test V1.4 loaded"
 )

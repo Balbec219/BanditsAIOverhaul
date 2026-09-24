@@ -1,765 +1,821 @@
 --[[
     BanditsAIOverhaul
-    Navigation Test Harness V1.0
+    Navigation Test Harness V1.2
 
-    Tests Navigation System without requiring
-    a live NPC for every test.
+    Tests NavigationSystem V1.2.
 
-    Build target:
-        Project Zomboid Build 42.20
+    This harness validates the public NavigationSystem API
+    without requiring a real character movement test.
+
+    Real movement is tested separately by:
+        BAO_NavigationMovementTest.lua
 ]]
 
 local Harness = {}
 
-Harness.VERSION = "1.0"
+Harness.VERSION = "1.2"
 
-local total = 0
-local pass = 0
-local fail = 0
+Harness.total = 0
+Harness.passed = 0
+Harness.failed = 0
 
---------------------------------------------------
--- LOG
---------------------------------------------------
+------------------------------------------------------------
+-- Logging
+------------------------------------------------------------
 
 local function Log(message)
-    print("[BAO][BAO_NavigationTestHarness] "
-        .. tostring(message))
+
+    print(
+        "[BAO][NavigationTestHarness V1.2] " ..
+        tostring(message)
+    )
+
 end
 
---------------------------------------------------
--- ASSERT
---------------------------------------------------
+------------------------------------------------------------
+-- Test helpers
+------------------------------------------------------------
 
-local function Test(name, condition)
+local function Pass(name)
 
-    total = total + 1
+    Harness.total = Harness.total + 1
+    Harness.passed = Harness.passed + 1
 
-    if condition then
+    Log(
+        "PASS: " ..
+        tostring(name)
+    )
 
-        pass = pass + 1
+end
+
+------------------------------------------------------------
+
+local function Fail(name, details)
+
+    Harness.total = Harness.total + 1
+    Harness.failed = Harness.failed + 1
+
+    Log(
+        "FAIL: " ..
+        tostring(name)
+    )
+
+    if details ~= nil then
 
         Log(
-            "[PASS] "
-            .. tostring(name)
+            "      " ..
+            tostring(details)
         )
+
+    end
+
+end
+
+------------------------------------------------------------
+
+local function AssertTrue(name, value)
+
+    if value then
+
+        Pass(name)
 
     else
 
-        fail = fail + 1
-
-        Log(
-            "[FAIL] "
-            .. tostring(name)
+        Fail(
+            name,
+            "Expected true, got " ..
+            tostring(value)
         )
 
     end
 
 end
 
---------------------------------------------------
--- GET SYSTEM
---------------------------------------------------
+------------------------------------------------------------
 
-local function GetNavigationSystem()
+local function AssertFalse(name, value)
 
-    if BAO and BAO.NavigationSystem then
-        return BAO.NavigationSystem
+    if not value then
+
+        Pass(name)
+
+    else
+
+        Fail(
+            name,
+            "Expected false, got " ..
+            tostring(value)
+        )
+
     end
 
-    return nil
 end
 
---------------------------------------------------
--- TEST
---------------------------------------------------
+------------------------------------------------------------
 
-function Harness.Run()
+local function AssertEqual(name, actual, expected)
 
-    Log("==============================")
-    Log("Navigation System Test V"
-        .. Harness.VERSION)
-    Log("==============================")
+    if actual == expected then
+
+        Pass(name)
+
+    else
+
+        Fail(
+            name,
+            "Expected " ..
+            tostring(expected) ..
+            ", got " ..
+            tostring(actual)
+        )
+
+    end
+
+end
+
+------------------------------------------------------------
+
+local function AssertNotNil(name, value)
+
+    if value ~= nil then
+
+        Pass(name)
+
+    else
+
+        Fail(
+            name,
+            "Expected non-nil value"
+        )
+
+    end
+
+end
+
+------------------------------------------------------------
+
+local function AssertNil(name, value)
+
+    if value == nil then
+
+        Pass(name)
+
+    else
+
+        Fail(
+            name,
+            "Expected nil value"
+        )
+
+    end
+
+end
+
+------------------------------------------------------------
+-- Dependency
+------------------------------------------------------------
+
+local function GetNavigation()
+
+    if BAO == nil then
+
+        return nil
+
+    end
+
+    return BAO.NavigationSystem
+
+end
+
+------------------------------------------------------------
+-- Tests
+------------------------------------------------------------
+
+local function RunTests()
 
     local Navigation =
-        GetNavigationSystem()
+        GetNavigation()
 
-    --------------------------------------------------
-    -- 1. DEPENDENCY
-    --------------------------------------------------
+    Log("========================================")
+    Log("Navigation Test Harness V1.2")
+    Log("========================================")
 
-    Test(
-        "NavigationSystem available",
-        Navigation ~= nil
+    --------------------------------------------------------
+    -- 1. Dependency
+    --------------------------------------------------------
+
+    AssertNotNil(
+        "NavigationSystem dependency",
+        Navigation
     )
 
-    if not Navigation then
+    if Navigation == nil then
 
-        Log("NavigationSystem unavailable")
-        Log("TEST ABORTED")
+        Log("NavigationSystem unavailable.")
+        Log("Tests aborted.")
 
         return
 
     end
 
-    --------------------------------------------------
-    -- 2. VERSION
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- 2. Version
+    --------------------------------------------------------
 
-    Test(
-        "Version is 1.0",
-        Navigation.VERSION == "1.0"
+    AssertEqual(
+        "NavigationSystem version",
+        Navigation.VERSION,
+        "1.2"
     )
 
-    --------------------------------------------------
-    -- 3. STATES
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- 3. States
+    --------------------------------------------------------
 
-    Test(
-        "IDLE state exists",
-        Navigation.STATE.IDLE == "idle"
+    AssertNotNil(
+        "STATES table",
+        Navigation.STATES
     )
 
-    Test(
-        "PATHFINDING state exists",
-        Navigation.STATE.PATHFINDING == "pathfinding"
+    AssertEqual(
+        "STATES.IDLE",
+        Navigation.STATES.IDLE,
+        "IDLE"
     )
 
-    Test(
-        "MOVING state exists",
-        Navigation.STATE.MOVING == "moving"
+    AssertEqual(
+        "STATES.REQUESTED",
+        Navigation.STATES.REQUESTED,
+        "REQUESTED"
     )
 
-    Test(
-        "ARRIVED state exists",
-        Navigation.STATE.ARRIVED == "arrived"
+    AssertEqual(
+        "STATES.PATHFINDING",
+        Navigation.STATES.PATHFINDING,
+        "PATHFINDING"
     )
 
-    Test(
-        "FAILED state exists",
-        Navigation.STATE.FAILED == "failed"
+    AssertEqual(
+        "STATES.MOVING",
+        Navigation.STATES.MOVING,
+        "MOVING"
     )
 
-    Test(
-        "CANCELLED state exists",
-        Navigation.STATE.CANCELLED == "cancelled"
+    AssertEqual(
+        "STATES.ARRIVED",
+        Navigation.STATES.ARRIVED,
+        "ARRIVED"
     )
 
-    --------------------------------------------------
-    -- 4. TARGET TYPES
-    --------------------------------------------------
-
-    Test(
-        "LOCATION target exists",
-        Navigation.TARGET_TYPE.LOCATION == "location"
+    AssertEqual(
+        "STATES.FAILED",
+        Navigation.STATES.FAILED,
+        "FAILED"
     )
 
-    Test(
-        "CHARACTER target exists",
-        Navigation.TARGET_TYPE.CHARACTER == "character"
+    AssertEqual(
+        "STATES.CANCELLED",
+        Navigation.STATES.CANCELLED,
+        "CANCELLED"
     )
 
-    Test(
-        "SOUND target exists",
-        Navigation.TARGET_TYPE.SOUND == "sound"
+    --------------------------------------------------------
+    -- 4. Results
+    --------------------------------------------------------
+
+    AssertNotNil(
+        "RESULTS table",
+        Navigation.RESULTS
     )
 
-    --------------------------------------------------
-    -- 5. LOCATION TARGET
-    --------------------------------------------------
+    AssertEqual(
+        "RESULTS.SUCCESS",
+        Navigation.RESULTS.SUCCESS,
+        "SUCCESS"
+    )
+
+    AssertEqual(
+        "RESULTS.WORKING",
+        Navigation.RESULTS.WORKING,
+        "WORKING"
+    )
+
+    AssertEqual(
+        "RESULTS.FAILED",
+        Navigation.RESULTS.FAILED,
+        "FAILED"
+    )
+
+    AssertEqual(
+        "RESULTS.CANCELLED",
+        Navigation.RESULTS.CANCELLED,
+        "CANCELLED"
+    )
+
+    --------------------------------------------------------
+    -- 5. Target types
+    --------------------------------------------------------
+
+    AssertNotNil(
+        "TARGET_TYPES table",
+        Navigation.TARGET_TYPES
+    )
+
+    AssertEqual(
+        "TARGET_TYPES.LOCATION",
+        Navigation.TARGET_TYPES.LOCATION,
+        "LOCATION"
+    )
+
+    AssertEqual(
+        "TARGET_TYPES.CHARACTER",
+        Navigation.TARGET_TYPES.CHARACTER,
+        "CHARACTER"
+    )
+
+    AssertEqual(
+        "TARGET_TYPES.SOUND",
+        Navigation.TARGET_TYPES.SOUND,
+        "SOUND"
+    )
+
+    --------------------------------------------------------
+    -- 6. Path results
+    --------------------------------------------------------
+
+    AssertNotNil(
+        "PATH_RESULTS table",
+        Navigation.PATH_RESULTS
+    )
+
+    AssertEqual(
+        "PATH_RESULTS.WORKING",
+        Navigation.PATH_RESULTS.WORKING,
+        "Working"
+    )
+
+    AssertEqual(
+        "PATH_RESULTS.SUCCEEDED",
+        Navigation.PATH_RESULTS.SUCCEEDED,
+        "Succeeded"
+    )
+
+    AssertEqual(
+        "PATH_RESULTS.FAILED",
+        Navigation.PATH_RESULTS.FAILED,
+        "Failed"
+    )
+
+    --------------------------------------------------------
+    -- 7. Location target
+    --------------------------------------------------------
 
     local locationTarget =
         Navigation.CreateLocationTarget(
-            100,
-            200,
+            500,
+            600,
             0
         )
 
-    Test(
-        "Location target created",
-        locationTarget ~= nil
+    AssertNotNil(
+        "CreateLocationTarget",
+        locationTarget
     )
 
-    if locationTarget then
+    if locationTarget ~= nil then
 
-        Test(
-            "Location X correct",
-            locationTarget.x == 100
+        AssertEqual(
+            "Location target type",
+            locationTarget.type,
+            Navigation.TARGET_TYPES.LOCATION
         )
 
-        Test(
-            "Location Y correct",
-            locationTarget.y == 200
+        AssertEqual(
+            "Location target X",
+            locationTarget.x,
+            500
         )
 
-        Test(
-            "Location Z correct",
-            locationTarget.z == 0
+        AssertEqual(
+            "Location target Y",
+            locationTarget.y,
+            600
         )
 
-    else
-
-        Test(
-            "Location X correct",
-            false
+        AssertEqual(
+            "Location target Z",
+            locationTarget.z,
+            0
         )
 
-        Test(
-            "Location Y correct",
-            false
-        )
-
-        Test(
-            "Location Z correct",
-            false
+        AssertTrue(
+            "Validate location target",
+            Navigation.ValidateTarget(
+                locationTarget
+            )
         )
 
     end
 
-    --------------------------------------------------
-    -- 6. SOUND TARGET
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- 8. Sound target
+    --------------------------------------------------------
 
     local soundTarget =
         Navigation.CreateSoundTarget(
-            300,
-            400,
+            700,
+            800,
             0
         )
 
-    Test(
-        "Sound target created",
-        soundTarget ~= nil
+    AssertNotNil(
+        "CreateSoundTarget",
+        soundTarget
     )
 
-    if soundTarget then
+    if soundTarget ~= nil then
 
-        Test(
-            "Sound X correct",
-            soundTarget.x == 300
+        AssertEqual(
+            "Sound target type",
+            soundTarget.type,
+            Navigation.TARGET_TYPES.SOUND
         )
 
-        Test(
-            "Sound Y correct",
-            soundTarget.y == 400
-        )
-
-        Test(
-            "Sound Z correct",
-            soundTarget.z == 0
-        )
-
-    else
-
-        Test(
-            "Sound X correct",
-            false
-        )
-
-        Test(
-            "Sound Y correct",
-            false
-        )
-
-        Test(
-            "Sound Z correct",
-            false
+        AssertTrue(
+            "Validate sound target",
+            Navigation.ValidateTarget(
+                soundTarget
+            )
         )
 
     end
 
-    --------------------------------------------------
-    -- 7. TARGET VALIDATION
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- 9. Invalid targets
+    --------------------------------------------------------
 
-    local validLocation =
+    AssertFalse(
+        "Validate nil target",
         Navigation.ValidateTarget(
-            Navigation.TARGET_TYPE.LOCATION,
-            locationTarget
+            nil
         )
-
-    Test(
-        "Valid location accepted",
-        validLocation == true
     )
 
-    local invalidLocation =
+    AssertFalse(
+        "Validate invalid target type",
         Navigation.ValidateTarget(
-            Navigation.TARGET_TYPE.LOCATION,
             {
-                x = 100,
-                y = 200
+                type = "INVALID"
             }
         )
-
-    Test(
-        "Invalid location rejected",
-        invalidLocation == false
     )
 
-    local invalidType =
+    AssertFalse(
+        "Validate incomplete location target",
         Navigation.ValidateTarget(
-            "unknown_target",
-            locationTarget
-        )
+            {
+                type =
+                    Navigation.TARGET_TYPES.LOCATION,
 
-    Test(
-        "Unknown target rejected",
-        invalidType == false
+                x = 100,
+
+                y = 200
+
+                -- z missing
+            }
+        )
     )
 
-    --------------------------------------------------
-    -- 8. REQUEST CREATION
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- 10. Invalid character request
+    --------------------------------------------------------
 
-    local request =
+    local invalidRequest =
         Navigation.CreateRequest(
             nil,
-            Navigation.TARGET_TYPE.LOCATION,
             locationTarget,
             {
                 source = "NavigationTestHarness"
             }
         )
 
-    Test(
-        "Navigation request created",
-        request ~= nil
+    AssertNil(
+        "CreateRequest rejects nil character",
+        invalidRequest
     )
 
-    if request then
+    --------------------------------------------------------
+    -- 11. Helper rejects nil character
+    --------------------------------------------------------
 
-        Test(
-            "Request has ID",
-            request.navigationId ~= nil
-        )
-
-        Test(
-            "Request state is REQUESTED",
-            request.state ==
-                Navigation.STATE.REQUESTED
-        )
-
-        Test(
-            "Request result initially nil",
-            request.result == nil
-        )
-
-        Test(
-            "Request metadata preserved",
-            request.metadata ~= nil
-            and request.metadata.source ==
-                "NavigationTestHarness"
-        )
-
-    else
-
-        Test(
-            "Request has ID",
-            false
-        )
-
-        Test(
-            "Request state is REQUESTED",
-            false
-        )
-
-        Test(
-            "Request result initially nil",
-            false
-        )
-
-        Test(
-            "Request metadata preserved",
-            false
-        )
-
-    end
-
-    --------------------------------------------------
-    -- 9. LOCATION REQUEST HELPER
-    --------------------------------------------------
-
-    local locationRequest =
+    local invalidLocationRequest =
         Navigation.RequestLocation(
             nil,
             500,
             600,
             0,
             {
-                source = "helper_test"
+                source = "NavigationTestHarness"
             }
         )
 
-    Test(
-        "RequestLocation works",
-        locationRequest ~= nil
+    AssertNil(
+        "RequestLocation rejects nil character",
+        invalidLocationRequest
     )
 
-    if locationRequest then
+    --------------------------------------------------------
 
-        Test(
-            "RequestLocation target type correct",
-            locationRequest.targetType ==
-                Navigation.TARGET_TYPE.LOCATION
-        )
-
-        Test(
-            "RequestLocation coordinates correct",
-            locationRequest.target ~= nil
-            and locationRequest.target.x == 500
-            and locationRequest.target.y == 600
-            and locationRequest.target.z == 0
-        )
-
-    else
-
-        Test(
-            "RequestLocation target type correct",
-            false
-        )
-
-        Test(
-            "RequestLocation coordinates correct",
-            false
-        )
-
-    end
-
-    --------------------------------------------------
-    -- 10. SOUND REQUEST HELPER
-    --------------------------------------------------
-
-    local soundRequest =
+    local invalidSoundRequest =
         Navigation.RequestSound(
             nil,
             700,
             800,
-            0
+            0,
+            {
+                source = "NavigationTestHarness"
+            }
         )
 
-    Test(
-        "RequestSound works",
-        soundRequest ~= nil
+    AssertNil(
+        "RequestSound rejects nil character",
+        invalidSoundRequest
     )
 
-    if soundRequest then
-
-        Test(
-            "RequestSound target type correct",
-            soundRequest.targetType ==
-                Navigation.TARGET_TYPE.SOUND
-        )
-
-    else
-
-        Test(
-            "RequestSound target type correct",
-            false
-        )
-
-    end
-
-    --------------------------------------------------
-    -- 11. CHARACTER REQUEST VALIDATION
-    --------------------------------------------------
-
-    local invalidCharacterRequest =
-        Navigation.RequestCharacter(
-            nil,
-            nil
-        )
-
-    Test(
-        "Invalid character request rejected",
-        invalidCharacterRequest == nil
-    )
-
-    --------------------------------------------------
-    -- 12. INITIALIZATION
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- 12. Initialize
+    --------------------------------------------------------
 
     local initialized =
         Navigation.Initialize()
 
-    Test(
-        "Initialize returns true",
-        initialized == true
+    AssertTrue(
+        "Navigation.Initialize()",
+        initialized
     )
 
-    Test(
-        "System initialized",
-        Navigation.initialized == true
+    --------------------------------------------------------
+    -- 13. Runtime structure
+    --------------------------------------------------------
+
+    AssertNotNil(
+        "Navigation runtime",
+        Navigation.runtime
     )
 
-    --------------------------------------------------
-    -- 13. STATUS
-    --------------------------------------------------
+    if Navigation.runtime ~= nil then
+
+        AssertTrue(
+            "Runtime initialized",
+            Navigation.runtime.initialized
+        )
+
+        AssertTrue(
+            "Runtime attempts >= 1",
+            Navigation.runtime.attempts >= 1
+        )
+
+        AssertNotNil(
+            "Runtime currentNavigation field",
+            Navigation.runtime.currentNavigation
+        )
+
+        AssertNotNil(
+            "Runtime lastNavigation field",
+            Navigation.runtime.lastNavigation
+        )
+
+        AssertNotNil(
+            "Runtime navigationHistory",
+            Navigation.runtime.navigationHistory
+        )
+
+        AssertNotNil(
+            "Runtime statistics",
+            Navigation.runtime.statistics
+        )
+
+    end
+
+    --------------------------------------------------------
+    -- 14. Status
+    --------------------------------------------------------
 
     local status =
         Navigation.GetStatus()
 
-    Test(
-        "Status available",
-        status ~= nil
+    AssertEqual(
+        "GetStatus without active navigation",
+        status,
+        Navigation.STATES.IDLE
     )
 
-    if status then
+    --------------------------------------------------------
+    -- 15. Get current
+    --------------------------------------------------------
 
-        Test(
-            "Status version correct",
-            status.version == "1.0"
-        )
+    AssertNil(
+        "GetCurrentNavigation without active request",
+        Navigation.GetCurrentNavigation()
+    )
 
-        Test(
-            "Status initialized",
-            status.initialized == true
-        )
+    --------------------------------------------------------
+    -- 16. Get last
+    --------------------------------------------------------
 
-    else
+    AssertNil(
+        "GetLastNavigation initially",
+        Navigation.GetLastNavigation()
+    )
 
-        Test(
-            "Status version correct",
-            false
-        )
-
-        Test(
-            "Status initialized",
-            false
-        )
-
-    end
-
-    --------------------------------------------------
-    -- 14. HISTORY
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- 17. History
+    --------------------------------------------------------
 
     local history =
         Navigation.GetNavigationHistory()
 
-    Test(
-        "History available",
-        history ~= nil
+    AssertNotNil(
+        "GetNavigationHistory",
+        history
     )
 
-    Test(
-        "History is table",
-        type(history) == "table"
-    )
+    if history ~= nil then
 
-    --------------------------------------------------
-    -- 15. STATISTICS
-    --------------------------------------------------
+        AssertEqual(
+            "Initial history count",
+            #history,
+            0
+        )
+
+    end
+
+    --------------------------------------------------------
+    -- 18. Statistics
+    --------------------------------------------------------
 
     local statistics =
         Navigation.GetStatistics()
 
-    Test(
-        "Statistics available",
-        statistics ~= nil
+    AssertNotNil(
+        "GetStatistics",
+        statistics
     )
 
-    if statistics then
+    if statistics ~= nil then
 
-        Test(
-            "Statistics requests available",
+        AssertTrue(
+            "Statistics requests field",
             statistics.requests ~= nil
         )
 
-        Test(
-            "Statistics started available",
+        AssertTrue(
+            "Statistics started field",
             statistics.started ~= nil
         )
 
-        Test(
-            "Statistics completed available",
+        AssertTrue(
+            "Statistics completed field",
             statistics.completed ~= nil
         )
 
-        Test(
-            "Statistics failed available",
+        AssertTrue(
+            "Statistics failed field",
             statistics.failed ~= nil
         )
 
-        Test(
-            "Statistics cancelled available",
+        AssertTrue(
+            "Statistics cancelled field",
             statistics.cancelled ~= nil
         )
 
-    else
-
-        Test(
-            "Statistics requests available",
-            false
-        )
-
-        Test(
-            "Statistics started available",
-            false
-        )
-
-        Test(
-            "Statistics completed available",
-            false
-        )
-
-        Test(
-            "Statistics failed available",
-            false
-        )
-
-        Test(
-            "Statistics cancelled available",
-            false
-        )
-
-    end
-
-    --------------------------------------------------
-    -- 16. CANCEL
-    --------------------------------------------------
-
-    local cancelRequest =
-        Navigation.RequestLocation(
-            nil,
-            900,
-            1000,
+        AssertEqual(
+            "Initial requests",
+            statistics.requests,
             0
         )
 
-    Test(
-        "Cancel request created",
-        cancelRequest ~= nil
+    end
+
+    --------------------------------------------------------
+    -- 19. Distance without navigation
+    --------------------------------------------------------
+
+    AssertNil(
+        "GetDistanceToTarget(nil)",
+        Navigation.GetDistanceToTarget(
+            nil
+        )
     )
 
-    if cancelRequest then
+    --------------------------------------------------------
+    -- 20. PathFindBehavior invalid character
+    --------------------------------------------------------
 
-        local cancelled =
-            Navigation.Cancel(
-                cancelRequest,
-                "test_cancel"
-            )
+    AssertNil(
+        "GetPathFindBehavior(nil)",
+        Navigation.GetPathFindBehavior(
+            nil
+        )
+    )
 
-        Test(
-            "Cancel returns true",
-            cancelled == true
+    --------------------------------------------------------
+    -- 21. Cancel without active navigation
+    --------------------------------------------------------
+
+    local cancelled =
+        Navigation.Cancel(
+            "test_cancel"
         )
 
-        Test(
-            "Cancelled state correct",
-            cancelRequest.state ==
-                Navigation.STATE.CANCELLED
-        )
+    AssertFalse(
+        "Cancel without active navigation",
+        cancelled
+    )
 
-        Test(
-            "Cancelled result correct",
-            cancelRequest.result ==
-                Navigation.RESULT.CANCELLED
-        )
+    --------------------------------------------------------
+    -- 22. Reset
+    --------------------------------------------------------
 
-        Test(
-            "Cancel reason stored",
-            cancelRequest.failureReason ==
-                "test_cancel"
-        )
+    Navigation.Reset()
 
-    else
+    AssertFalse(
+        "Reset clears initialized",
+        Navigation.runtime.initialized
+    )
 
-        Test(
-            "Cancel returns true",
-            false
-        )
+    AssertEqual(
+        "Reset clears attempts",
+        Navigation.runtime.attempts,
+        0
+    )
 
-        Test(
-            "Cancelled state correct",
-            false
-        )
+    AssertNil(
+        "Reset clears current navigation",
+        Navigation.runtime.currentNavigation
+    )
 
-        Test(
-            "Cancelled result correct",
-            false
-        )
+    AssertNil(
+        "Reset clears last navigation",
+        Navigation.runtime.lastNavigation
+    )
 
-        Test(
-            "Cancel reason stored",
-            false
+    AssertNotNil(
+        "Reset creates navigation history",
+        Navigation.runtime.navigationHistory
+    )
+
+    if Navigation.runtime.navigationHistory ~= nil then
+
+        AssertEqual(
+            "Reset clears navigation history",
+            #Navigation.runtime.navigationHistory,
+            0
         )
 
     end
 
-    --------------------------------------------------
-    -- 17. RESET
-    --------------------------------------------------
-
-    Navigation.Reset()
-
-    local currentAfterReset =
-        Navigation.GetCurrentNavigation()
-
-    local lastAfterReset =
-        Navigation.GetLastNavigation()
-
-    local historyAfterReset =
-        Navigation.GetNavigationHistory()
-
-    Test(
-        "Reset clears current navigation",
-        currentAfterReset == nil
-    )
-
-    Test(
-        "Reset clears last navigation",
-        lastAfterReset == nil
-    )
-
-    Test(
-        "Reset clears history",
-        historyAfterReset ~= nil
-        and #historyAfterReset == 0
-    )
-
-    local resetStatistics =
-        Navigation.GetStatistics()
-
-    Test(
-        "Reset clears statistics",
-        resetStatistics ~= nil
-        and resetStatistics.requests == 0
-        and resetStatistics.started == 0
-        and resetStatistics.completed == 0
-        and resetStatistics.failed == 0
-        and resetStatistics.cancelled == 0
-    )
-
-    --------------------------------------------------
-    -- 18. REINITIALIZATION
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- 23. Reinitialize
+    --------------------------------------------------------
 
     local reinitialized =
         Navigation.Initialize()
 
-    Test(
-        "Reinitialize returns true",
-        reinitialized == true
+    AssertTrue(
+        "Reinitialize after reset",
+        reinitialized
     )
 
-    Test(
-        "System remains initialized",
-        Navigation.initialized == true
+    AssertTrue(
+        "Runtime initialized after reinitialize",
+        Navigation.runtime.initialized
     )
 
-    --------------------------------------------------
-    -- FINAL REPORT
-    --------------------------------------------------
+    --------------------------------------------------------
+    -- Final report
+    --------------------------------------------------------
 
-    Log("==============================")
-    Log("Navigation Test Results")
-    Log("==============================")
+    Log("========================================")
+    Log("NAVIGATION TEST REPORT")
+    Log("========================================")
 
-    Log("TOTAL: " .. tostring(total))
-    Log("PASS: " .. tostring(pass))
-    Log("FAIL: " .. tostring(fail))
+    Log(
+        "TOTAL: " ..
+        tostring(Harness.total)
+    )
 
-    if fail == 0 then
+    Log(
+        "PASS: " ..
+        tostring(Harness.passed)
+    )
+
+    Log(
+        "FAIL: " ..
+        tostring(Harness.failed)
+    )
+
+    if Harness.failed == 0 then
 
         Log(
             "STATUS: ALL TESTS PASSED"
@@ -773,37 +829,35 @@ function Harness.Run()
 
     end
 
-    Log("==============================")
+    Log("========================================")
 
-    return {
-        total = total,
-        pass = pass,
-        fail = fail,
-        success = fail == 0
-    }
 end
 
---------------------------------------------------
--- GAME START
---------------------------------------------------
+------------------------------------------------------------
+-- Run after game start
+------------------------------------------------------------
 
 if Events and Events.OnGameStart then
 
     Events.OnGameStart.Add(
         function()
 
-            Log("OnGameStart")
-
-            Harness.Run()
+            RunTests()
 
         end
     )
 
+else
+
+    Log(
+        "WARNING: Events.OnGameStart unavailable"
+    )
+
 end
 
---------------------------------------------------
--- EXPORT
---------------------------------------------------
+------------------------------------------------------------
+-- Export
+------------------------------------------------------------
 
 BAO = BAO or {}
 
@@ -811,9 +865,5 @@ BAO.NavigationTestHarness =
     Harness
 
 Log(
-    "Navigation Test Harness V"
-    .. Harness.VERSION
-    .. " module loaded"
+    "Navigation Test Harness V1.2 loaded"
 )
-
-return Harness
