@@ -1,945 +1,388 @@
-----------------------------------------------------------------
--- BanditsAIOverhaul
--- BAO Debug UI
--- Version: 1.2
---
--- Client-side developer debug interface.
---
--- F10
---   ↓
--- BAO Debug UI
---   ↓
--- sendClientCommand
---   ↓
--- BAO Debug Server
-----------------------------------------------------------------
+---------------------------------------------------------
+-- Bandits AI Overhaul
+-- BAO_DebugUI.lua
+-- V1.7 - Minimal stable Debug UI for B42.20
+---------------------------------------------------------
 
-if not BAO then
-    BAO = {}
+require "ISUI/ISCollapsableWindow"
+require "ISUI/ISButton"
+
+---------------------------------------------------------
+-- Safe references for Lua diagnostics
+---------------------------------------------------------
+
+local ISCollapsableWindowClass = _G["ISCollapsableWindow"]
+local ISButtonClass = _G["ISButton"]
+local UIFontClass = _G["UIFont"]
+local KeyboardClass = _G["Keyboard"]
+local getCoreFunction = _G["getCore"]
+
+---------------------------------------------------------
+-- Namespace
+---------------------------------------------------------
+
+BAO = BAO or {}
+BAO.DebugUI = BAO.DebugUI or {}
+
+---------------------------------------------------------
+-- Window class
+---------------------------------------------------------
+
+local BAODebugWindow =
+    ISCollapsableWindowClass:derive("BAO_DebugUI")
+
+---------------------------------------------------------
+-- State
+---------------------------------------------------------
+
+BAODebugWindow.instance = nil
+
+---------------------------------------------------------
+-- Constructor
+---------------------------------------------------------
+
+function BAODebugWindow:new(x, y, width, height)
+
+    local o =
+        ISCollapsableWindowClass:new(
+            x,
+            y,
+            width,
+            height
+        )
+
+    setmetatable(o, self)
+    self.__index = self
+
+    o.x = x
+    o.y = y
+
+    o.width = width
+    o.height = height
+
+    o.title = "BAO Debug UI"
+
+    o.resizable = false
+    o.drawFrame = true
+
+    o.backgroundColor = {
+        r = 0.05,
+        g = 0.05,
+        b = 0.05,
+        a = 0.95
+    }
+
+    o.borderColor = {
+        r = 0.4,
+        g = 0.4,
+        b = 0.4,
+        a = 1
+    }
+
+    return o
 end
 
-local DebugUI = {}
+---------------------------------------------------------
+-- Create children
+---------------------------------------------------------
 
-DebugUI.VERSION = "1.2"
-DebugUI.MODULE = "BAO_Debug"
+function BAODebugWindow:createChildren()
 
-----------------------------------------------------------------
--- UI configuration
-----------------------------------------------------------------
+    ISCollapsableWindowClass.createChildren(self)
 
-DebugUI.WIDTH = 480
-DebugUI.HEIGHT = 420
+    local titleBar = self:titleBarHeight()
 
-DebugUI.visible = false
-DebugUI.initialized = false
+    -----------------------------------------------------
+    -- Test button
+    -----------------------------------------------------
 
-DebugUI.panel = nil
-DebugUI.statusLabel = nil
-
-----------------------------------------------------------------
--- PZ UI classes
-----------------------------------------------------------------
-
----@type any
-local ISPanelClass = nil
-
----@type any
-local ISButtonClass = nil
-
----@type any
-local ISLabelClass = nil
-
----@type any
-local UIFontClass = nil
-
----@type any
-local UIManagerObject = nil
-
----@type any
-local getCoreFunction = nil
-
----@type any
-local sendClientCommandFunction = nil
-
-----------------------------------------------------------------
--- Load dependencies
-----------------------------------------------------------------
-
-local function LoadDependencies()
-
-    pcall(
-        require,
-        "ISUI/ISPanel"
-    )
-
-    pcall(
-        require,
-        "ISUI/ISButton"
-    )
-
-    pcall(
-        require,
-        "ISUI/ISLabel"
-    )
-
-    ISPanelClass = _G["ISPanel"]
-    ISButtonClass = _G["ISButton"]
-    ISLabelClass = _G["ISLabel"]
-    UIFontClass = _G["UIFont"]
-
-    UIManagerObject = _G["UIManager"]
-
-    getCoreFunction = _G["getCore"]
-
-    sendClientCommandFunction =
-        _G["sendClientCommand"]
-
-    if not ISPanelClass then
-        print(
-            "[BAO][DebugUI] Missing ISPanel"
+    self.testButton =
+        ISButtonClass:new(
+            20,
+            titleBar + 70,
+            180,
+            30,
+            "TEST BUTTON",
+            self,
+            BAODebugWindow.onTestButton
         )
-    end
 
-    if not ISButtonClass then
-        print(
-            "[BAO][DebugUI] Missing ISButton"
-        )
-    end
+    self.testButton:initialise()
 
-    if not ISLabelClass then
-        print(
-            "[BAO][DebugUI] Missing ISLabel"
-        )
-    end
+    self:addChild(self.testButton)
 
-    if not UIFontClass then
-        print(
-            "[BAO][DebugUI] Missing UIFont"
-        )
-    end
-
-    if not UIManagerObject then
-        print(
-            "[BAO][DebugUI] Missing UIManager"
-        )
-    end
-
-    if not getCoreFunction then
-        print(
-            "[BAO][DebugUI] Missing getCore"
-        )
-    end
-
-    return
-        ISPanelClass ~= nil and
-        ISButtonClass ~= nil and
-        ISLabelClass ~= nil and
-        UIFontClass ~= nil and
-        UIManagerObject ~= nil and
-        getCoreFunction ~= nil
 end
 
-----------------------------------------------------------------
--- Send command to server
-----------------------------------------------------------------
+---------------------------------------------------------
+-- Render
+---------------------------------------------------------
 
-function DebugUI.SendCommand(
-    command,
-    args
-)
+function BAODebugWindow:render()
 
-    if not sendClientCommandFunction then
+    ISCollapsableWindowClass.render(self)
 
-        sendClientCommandFunction =
-            _G["sendClientCommand"]
+    local titleBar = self:titleBarHeight()
 
-    end
+    -----------------------------------------------------
+    -- Header
+    -----------------------------------------------------
 
-    if not sendClientCommandFunction then
+    self:drawText(
+        "Bandits AI Overhaul",
+        20,
+        titleBar + 15,
+        1,
+        1,
+        1,
+        1,
+        UIFontClass.Small
+    )
 
-        print(
-            "[BAO][DebugUI] " ..
-            "sendClientCommand unavailable"
-        )
+    -----------------------------------------------------
+    -- Status
+    -----------------------------------------------------
 
-        return false
-    end
+    self:drawText(
+        "STATUS: UI TEST MODE",
+        20,
+        titleBar + 45,
+        0.7,
+        1,
+        0.7,
+        1,
+        UIFontClass.Small
+    )
 
-    args = args or {}
+    -----------------------------------------------------
+    -- Test information
+    -----------------------------------------------------
 
-    local success =
-        pcall(
-            sendClientCommandFunction,
-            DebugUI.MODULE,
-            command,
-            args
-        )
+    self:drawText(
+        "F10 = Open / Close Debug UI",
+        20,
+        titleBar + 120,
+        0.8,
+        0.8,
+        0.8,
+        1,
+        UIFontClass.Small
+    )
 
-    if not success then
+    self:drawText(
+        "BAO Debug UI V1.7",
+        20,
+        titleBar + 145,
+        0.6,
+        0.6,
+        0.6,
+        1,
+        UIFontClass.Small
+    )
 
-        print(
-            "[BAO][DebugUI] " ..
-            "Failed to send command: " ..
-            tostring(command)
-        )
-
-        return false
-    end
-
-    return true
 end
 
-----------------------------------------------------------------
--- Update status text
-----------------------------------------------------------------
+---------------------------------------------------------
+-- Test button
+---------------------------------------------------------
 
-function DebugUI.SetStatus(data)
+function BAODebugWindow:onTestButton()
 
-    if not data then
-        return
-    end
+    print("[BAO][DebugUI] TEST BUTTON PRESSED")
 
-    if not DebugUI.statusLabel then
-        return
-    end
+end
 
-    local text =
-        "Status: " ..
-        tostring(
-            data.status or "UNKNOWN"
-        )
+---------------------------------------------------------
+-- Close
+---------------------------------------------------------
 
-    if data.result then
+function BAODebugWindow:close()
 
-        text =
-            text ..
-            "\nResult: " ..
-            tostring(data.result)
+    print("[BAO][DebugUI] Close()")
 
-    end
+    self:setVisible(false)
 
-    if data.detail then
+    self:removeFromUIManager()
 
-        text =
-            text ..
-            "\nDetail: " ..
-            tostring(data.detail)
+    BAODebugWindow.instance = nil
 
-    end
+end
 
-    if data.npcExists ~= nil then
+---------------------------------------------------------
+-- Create window
+---------------------------------------------------------
 
-        text =
-            text ..
-            "\nNPC: " ..
-            tostring(data.npcExists)
+function BAO.DebugUI.Create()
 
-    end
+    if BAODebugWindow.instance then
 
-    if data.navigationState then
-
-        text =
-            text ..
-            "\nNavigation: " ..
-            tostring(data.navigationState)
-
-    end
-
-    if data.distance ~= nil then
-
-        local distanceText =
-            tostring(data.distance)
-
-        if type(data.distance) == "number" then
-
-            distanceText =
-                string.format(
-                    "%.2f",
-                    data.distance
-                )
-
+        if BAODebugWindow.instance:isVisible() then
+            return BAODebugWindow.instance
         end
 
-        text =
-            text ..
-            "\nDistance: " ..
-            distanceText
-
-    end
-
-    if data.pathResult then
-
-        text =
-            text ..
-            "\nPath: " ..
-            tostring(data.pathResult)
-
-    end
-
-    ----------------------------------------------------------------
-    -- Important:
-    -- Do NOT call setName().
-    -- setText() is sufficient for ISLabel.
-    ----------------------------------------------------------------
-
-    local success =
-        pcall(
-            function()
-
-                DebugUI.statusLabel:setText(
-                    text
-                )
-
-            end
-        )
-
-    if not success then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "Failed to update status label"
-        )
-
-    end
-end
-
-----------------------------------------------------------------
--- Server command
-----------------------------------------------------------------
-
-function DebugUI.OnServerCommand(
-    module,
-    command,
-    args
-)
-
-    if module ~= DebugUI.MODULE then
-        return
-    end
-
-    if command == "status" then
-
-        DebugUI.SetStatus(
-            args
-        )
-
-    end
-end
-
-----------------------------------------------------------------
--- Button helper
-----------------------------------------------------------------
-
-function DebugUI.AddButton(
-    panel,
-    x,
-    y,
-    width,
-    height,
-    text,
-    callback
-)
-
-    if not ISButtonClass then
-        return nil
-    end
-
-    local button
-
-    local success =
-        pcall(
-            function()
-
-                button =
-                    ISButtonClass:new(
-                        x,
-                        y,
-                        width,
-                        height,
-                        text,
-                        nil,
-                        callback
-                    )
-
-                button:initialise()
-                button:instantiate()
-
-                panel:addChild(
-                    button
-                )
-
-            end
-        )
-
-    if not success then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "Failed to create button: " ..
-            tostring(text)
-        )
-
-        return nil
-    end
-
-    return button
-end
-
-----------------------------------------------------------------
--- Label helper
-----------------------------------------------------------------
-
-function DebugUI.AddLabel(
-    panel,
-    x,
-    y,
-    width,
-    height,
-    text,
-    font
-)
-
-    if not ISLabelClass then
-        return nil
-    end
-
-    local label
-
-    local success =
-        pcall(
-            function()
-
-                label =
-                    ISLabelClass:new(
-                        x,
-                        y,
-                        height,
-                        text,
-                        1,
-                        1,
-                        1,
-                        1,
-                        font,
-                        true
-                    )
-
-                panel:addChild(
-                    label
-                )
-
-            end
-        )
-
-    if not success then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "Failed to create label: " ..
-            tostring(text)
-        )
-
-        return nil
-    end
-
-    return label
-end
-
-----------------------------------------------------------------
--- Create panel
-----------------------------------------------------------------
-
-function DebugUI.CreatePanel()
-
-    if DebugUI.panel then
-        return DebugUI.panel
-    end
-
-    if not LoadDependencies() then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "UI dependencies unavailable"
-        )
-
-        return nil
-    end
-
-    local core =
-        getCoreFunction()
-
-    if not core then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "getCore() returned nil"
-        )
-
-        return nil
     end
 
     local screenWidth =
-        core:getScreenWidth()
+        getCoreFunction():getScreenWidth()
 
     local screenHeight =
-        core:getScreenHeight()
+        getCoreFunction():getScreenHeight()
+
+    local width = 420
+    local height = 260
 
     local x =
         math.floor(
-            (screenWidth - DebugUI.WIDTH) / 2
+            (screenWidth - width) / 2
         )
 
     local y =
         math.floor(
-            (screenHeight - DebugUI.HEIGHT) / 2
+            (screenHeight - height) / 2
         )
-
-    local panel
-
-    local success =
-        pcall(
-            function()
-
-                panel =
-                    ISPanelClass:new(
-                        x,
-                        y,
-                        DebugUI.WIDTH,
-                        DebugUI.HEIGHT
-                    )
-
-                panel:initialise()
-                panel:instantiate()
-
-                panel.backgroundColor.a =
-                    0.90
-
-                panel.borderColor.a =
-                    1.0
-
-                panel:setVisible(
-                    false
-                )
-
-            end
-        )
-
-    if not success or not panel then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "Failed to create main panel"
-        )
-
-        return nil
-    end
-
-    ----------------------------------------------------------------
-    -- Header
-    ----------------------------------------------------------------
-
-    DebugUI.AddLabel(
-        panel,
-        20,
-        15,
-        440,
-        30,
-        "BAO DEBUG",
-        UIFontClass.Large
-    )
-
-    DebugUI.AddLabel(
-        panel,
-        20,
-        45,
-        440,
-        20,
-        "BanditsAIOverhaul developer tools",
-        UIFontClass.Small
-    )
-
-    ----------------------------------------------------------------
-    -- Status section
-    ----------------------------------------------------------------
-
-    DebugUI.AddLabel(
-        panel,
-        20,
-        80,
-        440,
-        20,
-        "RUNTIME STATUS",
-        UIFontClass.Small
-    )
-
-    local status =
-        DebugUI.AddLabel(
-            panel,
-            20,
-            105,
-            440,
-            65,
-            "Status: READY",
-            UIFontClass.Small
-        )
-
-    DebugUI.statusLabel =
-        status
-
-    ----------------------------------------------------------------
-    -- NPC section
-    ----------------------------------------------------------------
-
-    DebugUI.AddLabel(
-        panel,
-        20,
-        185,
-        440,
-        20,
-        "NPC TEST",
-        UIFontClass.Small
-    )
-
-    DebugUI.AddButton(
-        panel,
-        20,
-        210,
-        210,
-        35,
-        "Spawn Test NPC",
-        function()
-
-            DebugUI.SendCommand(
-                "spawn_npc"
-            )
-
-        end
-    )
-
-    DebugUI.AddButton(
-        panel,
-        250,
-        210,
-        210,
-        35,
-        "Destroy Test NPC",
-        function()
-
-            DebugUI.SendCommand(
-                "destroy_npc"
-            )
-
-        end
-    )
-
-    ----------------------------------------------------------------
-    -- Navigation section
-    ----------------------------------------------------------------
-
-    DebugUI.AddLabel(
-        panel,
-        20,
-        260,
-        440,
-        20,
-        "NAVIGATION TEST",
-        UIFontClass.Small
-    )
-
-    DebugUI.AddButton(
-        panel,
-        20,
-        285,
-        210,
-        35,
-        "Start Navigation",
-        function()
-
-            DebugUI.SendCommand(
-                "start_navigation"
-            )
-
-        end
-    )
-
-    DebugUI.AddButton(
-        panel,
-        250,
-        285,
-        210,
-        35,
-        "Cancel Navigation",
-        function()
-
-            DebugUI.SendCommand(
-                "cancel_navigation"
-            )
-
-        end
-    )
-
-    ----------------------------------------------------------------
-    -- Diagnostics
-    ----------------------------------------------------------------
-
-    DebugUI.AddLabel(
-        panel,
-        20,
-        335,
-        440,
-        20,
-        "DIAGNOSTICS",
-        UIFontClass.Small
-    )
-
-    DebugUI.AddButton(
-        panel,
-        20,
-        360,
-        210,
-        35,
-        "Get Status",
-        function()
-
-            DebugUI.SendCommand(
-                "get_status"
-            )
-
-        end
-    )
-
-    DebugUI.AddButton(
-        panel,
-        250,
-        360,
-        210,
-        35,
-        "Close",
-        function()
-
-            DebugUI.Hide()
-
-        end
-    )
-
-    ----------------------------------------------------------------
-    -- Register panel with UIManager
-    ----------------------------------------------------------------
-
-    local addSuccess =
-        pcall(
-            function()
-
-                UIManagerObject.Add(
-                    panel
-                )
-
-            end
-        )
-
-    if not addSuccess then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "UIManager.Add failed"
-        )
-
-        return nil
-    end
-
-    DebugUI.panel =
-        panel
 
     print(
-        "[BAO][DebugUI] " ..
-        "Panel created and registered"
+        "[BAO][DebugUI] Creating V1.7 window at "
+        .. tostring(x)
+        .. ", "
+        .. tostring(y)
     )
 
-    return panel
+    local window =
+        BAODebugWindow:new(
+            x,
+            y,
+            width,
+            height
+        )
+
+    window:initialise()
+
+    window:addToUIManager()
+
+    BAODebugWindow.instance = window
+
+    print("[BAO][DebugUI] Window created successfully")
+
+    return window
+
 end
 
-----------------------------------------------------------------
--- Show
-----------------------------------------------------------------
+---------------------------------------------------------
+-- Open
+---------------------------------------------------------
 
-function DebugUI.Show()
+function BAO.DebugUI.Open()
 
-    if not DebugUI.panel then
+    print("[BAO][DebugUI] Open()")
 
-        DebugUI.CreatePanel()
+    local window =
+        BAO.DebugUI.Create()
+
+    if window then
+
+        window:setVisible(true)
+
+        print("[BAO][DebugUI] Window visible")
 
     end
 
-    if not DebugUI.panel then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "Show failed: panel unavailable"
-        )
-
-        return
-    end
-
-    local success =
-        pcall(
-            function()
-
-                DebugUI.panel:setVisible(
-                    true
-                )
-
-            end
-        )
-
-    if not success then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "Failed to show panel"
-        )
-
-        return
-    end
-
-    DebugUI.visible = true
-
-    print(
-        "[BAO][DebugUI] UI shown"
-    )
-
-    DebugUI.SendCommand(
-        "get_status"
-    )
 end
 
-----------------------------------------------------------------
--- Hide
-----------------------------------------------------------------
+---------------------------------------------------------
+-- Close
+---------------------------------------------------------
 
-function DebugUI.Hide()
+function BAO.DebugUI.Close()
 
-    if not DebugUI.panel then
-        return
-    end
+    print("[BAO][DebugUI] Close()")
 
-    local success =
-        pcall(
-            function()
+    if BAODebugWindow.instance then
 
-                DebugUI.panel:setVisible(
-                    false
-                )
-
-            end
-        )
-
-    if not success then
-
-        print(
-            "[BAO][DebugUI] " ..
-            "Failed to hide panel"
-        )
+        BAODebugWindow.instance:close()
 
     end
 
-    DebugUI.visible = false
-
-    print(
-        "[BAO][DebugUI] UI hidden"
-    )
 end
 
-----------------------------------------------------------------
+---------------------------------------------------------
 -- Toggle
-----------------------------------------------------------------
+---------------------------------------------------------
 
-function DebugUI.Toggle()
+function BAO.DebugUI.Toggle()
 
-    if DebugUI.visible then
+    if BAODebugWindow.instance
+        and BAODebugWindow.instance:isVisible() then
 
-        DebugUI.Hide()
+        BAO.DebugUI.Close()
 
     else
 
-        DebugUI.Show()
+        BAO.DebugUI.Open()
 
     end
+
 end
 
-----------------------------------------------------------------
--- Keyboard
---
--- Build 42.20 currently reports the tested F10
--- through OnKeyPressed as 10001.
-----------------------------------------------------------------
+---------------------------------------------------------
+-- F10
+---------------------------------------------------------
 
-function DebugUI.OnKeyPressed(key)
+function BAO.DebugUI.OnKeyStartPressed(key)
 
-    if key ~= 10001 then
-        return
+    if key == KeyboardClass.KEY_F10 then
+
+        print("[BAO][DebugUI] F10 detected")
+
+        BAO.DebugUI.Toggle()
+
     end
 
-    DebugUI.Toggle()
 end
 
-----------------------------------------------------------------
+---------------------------------------------------------
 -- Game start
-----------------------------------------------------------------
+---------------------------------------------------------
 
-function DebugUI.OnGameStart()
+function BAO.DebugUI.OnGameStart()
 
-    DebugUI.initialized = true
+    print("[BAO][DebugUI] OnGameStart")
 
-    print(
-        "[BAO][DebugUI] " ..
-        "Version " ..
-        DebugUI.VERSION ..
-        " initialized"
-    )
 end
 
-----------------------------------------------------------------
+---------------------------------------------------------
 -- Events
-----------------------------------------------------------------
+---------------------------------------------------------
 
-local EventsTable =
-    _G["Events"]
+if Events then
 
-if EventsTable then
+    if Events.OnKeyStartPressed then
 
-    if EventsTable.OnKeyPressed then
+        Events.OnKeyStartPressed.Add(
+            BAO.DebugUI.OnKeyStartPressed
+        )
 
-        EventsTable.OnKeyPressed.Add(
-            DebugUI.OnKeyPressed
+        print(
+            "[BAO][DebugUI] OnKeyStartPressed registered"
         )
 
     end
 
-    if EventsTable.OnServerCommand then
+    if Events.OnGameStart then
 
-        EventsTable.OnServerCommand.Add(
-            DebugUI.OnServerCommand
+        Events.OnGameStart.Add(
+            BAO.DebugUI.OnGameStart
+        )
+
+        print(
+            "[BAO][DebugUI] OnGameStart registered"
         )
 
     end
 
-    if EventsTable.OnGameStart then
-
-        EventsTable.OnGameStart.Add(
-            DebugUI.OnGameStart
-        )
-
-    end
 end
 
-----------------------------------------------------------------
--- Export
-----------------------------------------------------------------
+---------------------------------------------------------
+-- Loaded
+---------------------------------------------------------
 
-BAO.DebugUI =
-    DebugUI
-
-print(
-    "[BAO][DebugUI] V" ..
-    DebugUI.VERSION ..
-    " loaded"
-)
+print("[BAO][DebugUI] V1.7 loaded")
