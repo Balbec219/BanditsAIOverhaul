@@ -2,7 +2,7 @@
 -- BanditsAIOverhaul
 -- BAO_ActionExecutor.lua
 --
--- Action Executor V1.0
+-- Action Executor V1.2
 --
 -- Purpose:
 --   Converts abstract actions from BAO_ActionSystem
@@ -21,7 +21,7 @@
 --   Navigation / Animation / Interaction / Combat
 --
 -- IMPORTANT:
---   V1.0 does NOT directly control NPC movement,
+--   V1.2 does NOT directly control NPC movement,
 --   animation or combat.
 --
 --   It provides the execution layer that those systems
@@ -34,7 +34,7 @@ local ActionExecutor = {}
 -- VERSION
 -- ============================================================
 
-ActionExecutor.VERSION = "1.0"
+ActionExecutor.VERSION = "1.2"
 
 -- ============================================================
 -- EXECUTION STATES
@@ -308,6 +308,8 @@ function ActionExecutor.CreateExecution(
         id = GenerateExecutionId(),
 
         actionId = actionId,
+        -- Opt-in linkage preserves standalone plan/execution tests.
+        action = metadata and metadata.linkedAction and action or nil,
 
         actionType =
             action.type or action.actionType,
@@ -347,6 +349,14 @@ function ActionExecutor.CreateExecution(
             action,
             metadata
         )
+
+    if execution.action and action.metadata and action.metadata.navigation then
+        local previousCheck = action.canComplete
+        action.canComplete = function(checkedAction)
+            if not execution.navigation or execution.navigation.state ~= "ARRIVED" then return false end
+            return not previousCheck or previousCheck(checkedAction) == true
+        end
+    end
 
     ActionExecutor.statistics.executionsCreated =
         ActionExecutor.statistics.executionsCreated + 1
@@ -404,6 +414,18 @@ function ActionExecutor.StartExecution(execution)
         return false, reason
     end
 
+    if execution.state ~= ActionExecutor.STATES.IDLE then
+        return false, "invalid_state"
+    end
+
+    if execution.action then
+        local system = GetActionSystem()
+        if not system or system.GetAction(execution.actionId) ~= execution.action
+            or execution.action.state ~= system.State.RUNNING then
+            return false, "action_not_running"
+        end
+    end
+
     if ActionExecutor.currentExecution then
         return false, "execution_already_active"
     end
@@ -449,6 +471,21 @@ function ActionExecutor.PrepareExecution(execution)
         return false, "invalid_state"
     end
 
+    local binding = execution.action and execution.action.metadata.navigation
+    if binding then
+        if execution.actionType ~= "patrol" then
+            return ActionExecutor.FailExecution(execution, "unsupported_navigation_action")
+        end
+        local navigation = BAO.NavigationSystem
+        if not navigation then return ActionExecutor.FailExecution(execution, "navigation_unavailable") end
+        local request = navigation.RequestLocation(binding.character, binding.x, binding.y, binding.z, binding.options)
+        if not request then return ActionExecutor.FailExecution(execution, "invalid_navigation_request") end
+        execution.navigation = request
+        execution.navigationModule = navigation
+        local started, reason = navigation.Start(request)
+        if not started then return ActionExecutor.FailExecution(execution, reason or "navigation_start_failed") end
+    end
+
     execution.plan.currentStep =
         "execute"
 
@@ -474,21 +511,20 @@ function ActionExecutor.ExecuteStep(execution)
         return false, "invalid_state"
     end
 
-    -- --------------------------------------------------------
-    -- V1.0:
-    --
-    -- The actual physical execution is intentionally deferred.
-    --
-    -- Future systems will be called here:
-    --
-    -- Navigation
-    -- Animation
-    -- Interaction
-    -- Combat
-    --
-    -- For now we maintain a valid execution state.
-    -- --------------------------------------------------------
+    local request = execution.navigation
+    if request then
+        if request.state == "ARRIVED" then
+            return ActionExecutor.CompleteExecution(execution, "arrived", { navigationId = request.id })
+        elseif request.state == "FAILED" then
+            return ActionExecutor.FailExecution(execution, request.reason or "navigation_failed")
+        elseif request.state == "CANCELLED" then
+            return ActionExecutor.CancelExecution(execution, request.reason or "navigation_cancelled")
+        elseif execution.navigationModule.GetCurrentNavigation() ~= request then
+            return ActionExecutor.FailExecution(execution, "navigation_ownership_lost")
+        end
+    end
 
+    -- Unbound actions wait for an explicit result; they do not simulate movement.
     return true, nil
 end
 
@@ -496,208 +532,112 @@ end
 -- COMPLETE
 -- ============================================================
 
-function ActionExecutor.CompleteExecution(
-    execution,
-    reason
-)
+-- Complete a pair exactly once. Never clear another execution's ownership.
+local TERMINAL = {
+    completed = { "COMPLETED", "SUCCESS", "executionsCompleted" },
+    failed = { "FAILED", "FAILED", "executionsFailed" },
+    interrupted = { "INTERRUPTED", "INTERRUPTED", "executionsInterrupted" },
+    cancelled = { "CANCELLED", "CANCELLED", "executionsCancelled" }
+}
 
-    if not execution then
+local function FinishExecution(execution, outcome, reason, resultData)
+    if not execution or ActionExecutor.currentExecution ~= execution
+        or execution._finished or execution._finishing then
         return false
     end
 
-    execution.state =
-        ActionExecutor.STATES.COMPLETED
-
-    execution.result =
-        ActionExecutor.RESULTS.SUCCESS
-
-    execution.reason =
-        reason or "completed"
-
-    execution.finishedAt =
-        GetCurrentTime()
-
-    if execution.startedAt then
-        execution.elapsedTime =
-            execution.finishedAt
-            - execution.startedAt
+    local action = execution.action
+    local system = GetActionSystem()
+    if outcome == "interrupted" and action and not action.interruptible
+        and not TERMINAL[action.state] then return false end
+    local navigation, request = execution.navigationModule, execution.navigation
+    if outcome == "completed" and request and request.state ~= "ARRIVED" then return false end
+    if navigation and navigation.GetCurrentNavigation() == request and request then
+        if not navigation.Cancel(reason or outcome, request) then return false end
+    end
+    if action then
+        if not system or system.GetAction(execution.actionId) ~= action then
+            outcome, reason = "failed", "linked_action_missing"
+        elseif not TERMINAL[action.state] then
+            execution._finishing = true
+            local changed = false
+            if outcome == "completed" then
+                changed = system.CompleteAction(action.id, system.Result.SUCCESS, resultData)
+            elseif outcome == "failed" then
+                changed = system.FailAction(action.id, system.Result.FAILED, reason, resultData)
+            elseif outcome == "interrupted" then
+                changed = system.InterruptAction(action.id, reason)
+            elseif outcome == "cancelled" then
+                changed = system.CancelAction(action.id, reason)
+            end
+            execution._finishing = nil
+            if not changed then return false end
+        end
+        -- An externally completed action is authoritative, including its reason.
+        if system and system.GetAction(execution.actionId) == action and TERMINAL[action.state] then
+            outcome = action.state
+            reason = action.reason or reason
+            action.reason = reason
+            resultData = action.resultData
+        end
     end
 
-    ActionExecutor.lastExecution =
-        execution
-
-    ActionExecutor.currentExecution =
-        nil
-
-    ActionExecutor.statistics.executionsCompleted =
-        ActionExecutor.statistics.executionsCompleted + 1
-
+    local terminal = TERMINAL[outcome]
+    if not terminal then return false end
+    execution.state = terminal[1]
+    execution.result = terminal[2]
+    if action and action.result == "blocked" and outcome == "failed" then
+        execution.result = ActionExecutor.RESULTS.BLOCKED
+    end
+    execution.reason = reason or outcome
+    execution.resultData = resultData
+    execution.finishedAt = GetCurrentTime()
+    execution.elapsedTime = execution.finishedAt - (execution.startedAt or execution.finishedAt)
+    execution.plan.currentStep = "finish"
+    execution._finished = true
+    ActionExecutor.lastExecution = execution
+    ActionExecutor.currentExecution = nil
+    ActionExecutor.statistics[terminal[3]] = ActionExecutor.statistics[terminal[3]] + 1
     AddHistory(execution)
-
-    Log(
-        "Execution completed: "
-        .. tostring(execution.id)
-    )
-
+    Log("Execution " .. outcome .. ": " .. tostring(execution.id)
+        .. " action=" .. tostring(execution.actionId)
+        .. " reason=" .. tostring(execution.reason))
     return true
 end
 
--- ============================================================
--- FAIL
--- ============================================================
+function ActionExecutor.CompleteExecution(execution, reason, resultData)
+    return FinishExecution(execution, "completed", reason, resultData)
+end
 
-function ActionExecutor.FailExecution(
-    execution,
-    reason
-)
+function ActionExecutor.FailExecution(execution, reason, resultData)
+    return FinishExecution(execution, "failed", reason, resultData)
+end
 
-    if not execution then
-        return false
+function ActionExecutor.InterruptExecution(execution, reason)
+    return FinishExecution(execution, "interrupted", reason)
+end
+
+function ActionExecutor.CancelExecution(execution, reason)
+    return FinishExecution(execution, "cancelled", reason)
+end
+
+-- Synchronize only; Controller may call this without advancing the executor tick.
+function ActionExecutor.SyncActionState(execution)
+    if not execution or ActionExecutor.currentExecution ~= execution then return false end
+    local action = execution.action
+    if not action then return false end
+    local system = GetActionSystem()
+    if not system or system.GetAction(execution.actionId) ~= action then
+        return FinishExecution(execution, "failed", "linked_action_missing")
     end
-
-    execution.state =
-        ActionExecutor.STATES.FAILED
-
-    execution.result =
-        ActionExecutor.RESULTS.FAILED
-
-    execution.reason =
-        reason or "failed"
-
-    execution.finishedAt =
-        GetCurrentTime()
-
-    if execution.startedAt then
-        execution.elapsedTime =
-            execution.finishedAt
-            - execution.startedAt
+    if TERMINAL[action.state] then
+        return FinishExecution(execution, action.state, action.reason, action.resultData)
     end
-
-    ActionExecutor.lastExecution =
-        execution
-
-    ActionExecutor.currentExecution =
-        nil
-
-    ActionExecutor.statistics.executionsFailed =
-        ActionExecutor.statistics.executionsFailed + 1
-
-    AddHistory(execution)
-
-    Log(
-        "Execution failed: "
-        .. tostring(execution.id)
-        .. " reason="
-        .. tostring(execution.reason)
-    )
-
-    return true
+    return false
 end
 
 -- ============================================================
--- INTERRUPT
--- ============================================================
-
-function ActionExecutor.InterruptExecution(
-    execution,
-    reason
-)
-
-    if not execution then
-        return false
-    end
-
-    execution.state =
-        ActionExecutor.STATES.INTERRUPTED
-
-    execution.result =
-        ActionExecutor.RESULTS.INTERRUPTED
-
-    execution.reason =
-        reason or "interrupted"
-
-    execution.finishedAt =
-        GetCurrentTime()
-
-    if execution.startedAt then
-        execution.elapsedTime =
-            execution.finishedAt
-            - execution.startedAt
-    end
-
-    ActionExecutor.lastExecution =
-        execution
-
-    ActionExecutor.currentExecution =
-        nil
-
-    ActionExecutor.statistics.executionsInterrupted =
-        ActionExecutor.statistics.executionsInterrupted + 1
-
-    AddHistory(execution)
-
-    Log(
-        "Execution interrupted: "
-        .. tostring(execution.id)
-        .. " reason="
-        .. tostring(execution.reason)
-    )
-
-    return true
-end
-
--- ============================================================
--- CANCEL
--- ============================================================
-
-function ActionExecutor.CancelExecution(
-    execution,
-    reason
-)
-
-    if not execution then
-        return false
-    end
-
-    execution.state =
-        ActionExecutor.STATES.CANCELLED
-
-    execution.result =
-        ActionExecutor.RESULTS.CANCELLED
-
-    execution.reason =
-        reason or "cancelled"
-
-    execution.finishedAt =
-        GetCurrentTime()
-
-    if execution.startedAt then
-        execution.elapsedTime =
-            execution.finishedAt
-            - execution.startedAt
-    end
-
-    ActionExecutor.lastExecution =
-        execution
-
-    ActionExecutor.currentExecution =
-        nil
-
-    ActionExecutor.statistics.executionsCancelled =
-        ActionExecutor.statistics.executionsCancelled + 1
-
-    AddHistory(execution)
-
-    Log(
-        "Execution cancelled: "
-        .. tostring(execution.id)
-    )
-
-    return true
-end
-
--- ============================================================
--- UPDATE
+-- UPDATE (physical handlers are a subsequent integration step)
 -- ============================================================
 
 function ActionExecutor.Update()
@@ -708,6 +648,8 @@ function ActionExecutor.Update()
     if not execution then
         return
     end
+
+    if ActionExecutor.SyncActionState(execution) then return end
 
     local now = GetCurrentTime()
 
@@ -801,6 +743,12 @@ end
 
 function ActionExecutor.Reset()
 
+    if ActionExecutor.currentExecution then
+        if not ActionExecutor.CancelExecution(ActionExecutor.currentExecution, "executor_reset") then
+            return false
+        end
+    end
+
     ActionExecutor.currentExecution = nil
     ActionExecutor.lastExecution = nil
 
@@ -819,6 +767,7 @@ function ActionExecutor.Reset()
     }
 
     Log("Action Executor reset")
+    return true
 end
 
 -- ============================================================

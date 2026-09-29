@@ -2,7 +2,7 @@
 -- BAO_ActionSystem.lua
 -- BanditsAIOverhaul
 --
--- Action System V1.0
+-- Action System V1.2
 --
 -- Architecture:
 -- Decision -> Action -> Result
@@ -22,7 +22,7 @@ local ActionSystem = {}
 -- VERSION
 -----------------------------------------------------------
 
-ActionSystem.Version = "V1.0"
+ActionSystem.Version = "V1.2"
 
 -----------------------------------------------------------
 -- ACTION STATES
@@ -64,7 +64,7 @@ ActionSystem.lastResult = nil
 -----------------------------------------------------------
 
 local function Log(message)
-    print("[BAO ActionSystem V1.0] " .. tostring(message))
+    print("[BAO ActionSystem V1.2] " .. tostring(message))
 end
 
 -----------------------------------------------------------
@@ -127,6 +127,10 @@ function ActionSystem.CreateAction(actionType, data)
     -------------------------------------------------------
 
     action.duration = data.duration or 0
+    -- Executor-owned actions finish on a subsystem result, never on a timer.
+    action.externalCompletion = data.externalCompletion == true
+    action.canComplete = data.canComplete
+    action.canComplete = data.canComplete
     action.elapsed = 0
 
     -------------------------------------------------------
@@ -331,6 +335,7 @@ function ActionSystem.StartAction(actionId)
         action.state = ActionSystem.State.FAILED
         action.result = ActionSystem.Result.BLOCKED
         action.reason = reason
+        action._finished = true
 
         ActionSystem.lastAction = action
         ActionSystem.lastResult = action.result
@@ -343,7 +348,7 @@ function ActionSystem.StartAction(actionId)
         )
 
         if action.onFail then
-            pcall(action.onFail, action, reason)
+            pcall(action.onFail, action, action.result, reason)
         end
 
         return false
@@ -383,6 +388,9 @@ function ActionSystem.StartAction(actionId)
                 ": " ..
                 tostring(err)
             )
+            ActionSystem.FailAction(action.id, ActionSystem.Result.FAILED,
+                "start_callback_error")
+            return false
         end
     end
 
@@ -390,7 +398,11 @@ function ActionSystem.StartAction(actionId)
     -- Instant action
     -------------------------------------------------------
 
-    if action.duration <= 0 then
+    if action.state ~= ActionSystem.State.RUNNING then
+        return action.state == ActionSystem.State.COMPLETED
+    end
+
+    if not action.externalCompletion and action.duration <= 0 then
         ActionSystem.CompleteAction(
             action.id,
             ActionSystem.Result.SUCCESS
@@ -489,7 +501,7 @@ function ActionSystem.UpdateAction(actionId, deltaTime)
     -- Duration completed
     -------------------------------------------------------
 
-    if action.duration > 0
+    if not action.externalCompletion and action.duration > 0
         and action.elapsed >= action.duration then
 
         ActionSystem.CompleteAction(
@@ -523,6 +535,16 @@ function ActionSystem.CompleteAction(actionId, result, resultData)
         )
 
         return false
+    end
+
+    if action.canComplete then
+        local ok, allowed = pcall(action.canComplete, action)
+        if not ok or allowed ~= true then return false end
+    end
+
+    if action.canComplete then
+        local ok, allowed = pcall(action.canComplete, action)
+        if not ok or allowed ~= true then return false end
     end
 
     action.state = ActionSystem.State.COMPLETED

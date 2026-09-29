@@ -2,7 +2,7 @@
 -- BAO_RoutineDecisionBridgeTestHarness.lua
 -- BanditsAIOverhaul
 --
--- Routine / Decision Bridge Test Harness V1.0
+-- Routine / Decision Bridge Test Harness V1.1
 --
 -- Tests:
 --   1. Dependencies
@@ -652,7 +652,7 @@ local function TestEmergencyDetection()
             normalWorld
         )
 
-    local normalEmergency = nil
+    local normalEmergency = normalResult
 
     if type(normalResult) == "table" then
 
@@ -675,7 +675,7 @@ local function TestEmergencyDetection()
 
     Test(
         "Normal world is not emergency",
-        normalEmergency ~= true,
+        normalEmergency == false,
         "emergency=" .. tostring(normalEmergency)
     )
 
@@ -691,13 +691,12 @@ local function TestEmergencyDetection()
         panic = 0
     }
 
-    local combatResult =
+    local combatResult, combatReason =
         bridge.EvaluateEmergency(
             combatWorld
         )
 
-    local combatEmergency = nil
-    local combatReason = nil
+    local combatEmergency = combatResult
 
     if type(combatResult) == "table" then
 
@@ -763,7 +762,7 @@ local function TestEmergencyDetection()
             healthWorld
         )
 
-    local healthEmergency = nil
+    local healthEmergency = healthResult
 
     if type(healthResult) == "table" then
 
@@ -807,7 +806,7 @@ local function TestEmergencyDetection()
             zombieWorld
         )
 
-    local zombieEmergency = nil
+    local zombieEmergency = zombieResult
 
     if type(zombieResult) == "table" then
 
@@ -1203,7 +1202,7 @@ end
 
 function TestHarness.Run()
     Log("================================================")
-    Log("Routine / Decision Bridge Test Harness V1.0")
+    Log("Routine / Decision Bridge Test Harness V1.1")
     Log("================================================")
 
     totalTests = 0
@@ -1318,5 +1317,5 @@ BAO.RoutineDecisionBridgeTestHarness =
     TestHarness
 
 Log(
-    "Routine / Decision Bridge Test Harness V1.0 module loaded"
+    "Routine / Decision Bridge Test Harness V1.1 module loaded"
 )

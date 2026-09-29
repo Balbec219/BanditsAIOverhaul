@@ -1,0 +1,7763 @@
+===== ACTION SYSTEM =====
+-----------------------------------------------------------
+-- BAO_ActionSystem.lua
+-- BanditsAIOverhaul
+--
+-- Action System V1.0
+--
+-- Architecture:
+-- Decision -> Action -> Result
+--
+-- This version provides the universal action engine.
+-- It does not directly control physical NPC movement
+-- or animations yet.
+-----------------------------------------------------------
+
+if not BAO then
+    BAO = {}
+end
+
+local ActionSystem = {}
+
+-----------------------------------------------------------
+-- VERSION
+-----------------------------------------------------------
+
+ActionSystem.Version = "V1.0"
+
+-----------------------------------------------------------
+-- ACTION STATES
+-----------------------------------------------------------
+
+ActionSystem.State = {
+    PENDING = "pending",
+    RUNNING = "running",
+    COMPLETED = "completed",
+    FAILED = "failed",
+    INTERRUPTED = "interrupted",
+    CANCELLED = "cancelled"
+}
+
+-----------------------------------------------------------
+-- ACTION RESULTS
+-----------------------------------------------------------
+
+ActionSystem.Result = {
+    SUCCESS = "success",
+    FAILED = "failed",
+    BLOCKED = "blocked",
+    INTERRUPTED = "interrupted",
+    CANCELLED = "cancelled"
+}
+
+-----------------------------------------------------------
+-- INTERNAL RUNTIME STATE
+-----------------------------------------------------------
+
+ActionSystem.initialized = false
+ActionSystem.actions = {}
+ActionSystem.nextActionId = 1
+ActionSystem.lastAction = nil
+ActionSystem.lastResult = nil
+
+-----------------------------------------------------------
+-- LOGGING
+-----------------------------------------------------------
+
+local function Log(message)
+    print("[BAO ActionSystem V1.0] " .. tostring(message))
+end
+
+-----------------------------------------------------------
+-- UTILITY
+-----------------------------------------------------------
+
+local function GenerateActionId()
+    local id = "bao_action_" .. tostring(ActionSystem.nextActionId)
+
+    ActionSystem.nextActionId =
+        ActionSystem.nextActionId + 1
+
+    return id
+end
+
+-----------------------------------------------------------
+-- ACTION OBJECT
+-----------------------------------------------------------
+
+function ActionSystem.CreateAction(actionType, data)
+
+    data = data or {}
+
+    local action = {}
+
+    -------------------------------------------------------
+    -- IDENTITY
+    -------------------------------------------------------
+
+    action.id = data.id or GenerateActionId()
+    action.type = actionType or data.type or "unknown"
+
+    -------------------------------------------------------
+    -- STATE
+    -------------------------------------------------------
+
+    action.state = ActionSystem.State.PENDING
+
+    -------------------------------------------------------
+    -- PRIORITY
+    -------------------------------------------------------
+
+    action.priority = data.priority or 0
+
+    -------------------------------------------------------
+    -- TARGET
+    -------------------------------------------------------
+
+    action.target = data.target or nil
+    action.targetId = data.targetId or nil
+
+    -------------------------------------------------------
+    -- LOCATION
+    -------------------------------------------------------
+
+    action.location = data.location or nil
+
+    -------------------------------------------------------
+    -- TIMING
+    -------------------------------------------------------
+
+    action.duration = data.duration or 0
+    action.elapsed = 0
+
+    -------------------------------------------------------
+    -- CONTROL
+    -------------------------------------------------------
+
+    if data.interruptible == nil then
+        action.interruptible = true
+    else
+        action.interruptible = data.interruptible
+    end
+
+    -------------------------------------------------------
+    -- REQUIREMENTS
+    -------------------------------------------------------
+
+    action.requirements = data.requirements or {}
+
+    -------------------------------------------------------
+    -- RESULT
+    -------------------------------------------------------
+
+    action.result = nil
+    action.resultData = nil
+
+    -------------------------------------------------------
+    -- FAILURE / INTERRUPTION REASON
+    -------------------------------------------------------
+
+    action.reason = nil
+
+    -------------------------------------------------------
+    -- CALLBACKS
+    -------------------------------------------------------
+
+    action.onStart = data.onStart or nil
+    action.onUpdate = data.onUpdate or nil
+    action.onInterrupt = data.onInterrupt or nil
+    action.onComplete = data.onComplete or nil
+    action.onFail = data.onFail or nil
+    action.onCancel = data.onCancel or nil
+
+    -------------------------------------------------------
+    -- METADATA
+    -------------------------------------------------------
+
+    action.metadata = data.metadata or {}
+
+    -------------------------------------------------------
+    -- INTERNAL FLAGS
+    -------------------------------------------------------
+
+    action._started = false
+    action._finished = false
+
+    return action
+end
+
+-----------------------------------------------------------
+-- REGISTER ACTION
+-----------------------------------------------------------
+
+function ActionSystem.RegisterAction(action)
+
+    if not action then
+        Log("RegisterAction failed: action is nil")
+        return false
+    end
+
+    if not action.id then
+        Log("RegisterAction failed: action has no ID")
+        return false
+    end
+
+    ActionSystem.actions[action.id] = action
+
+    ActionSystem.lastAction = action
+
+    Log(
+        "Action registered: " ..
+        tostring(action.id) ..
+        " [" ..
+        tostring(action.type) ..
+        "]"
+    )
+
+    return true
+end
+
+-----------------------------------------------------------
+-- GET ACTION
+-----------------------------------------------------------
+
+function ActionSystem.GetAction(actionId)
+
+    if not actionId then
+        return nil
+    end
+
+    return ActionSystem.actions[actionId]
+end
+
+-----------------------------------------------------------
+-- CHECK REQUIREMENTS
+-----------------------------------------------------------
+
+function ActionSystem.CheckRequirements(action)
+
+    if not action then
+        return false, "action_nil"
+    end
+
+    if not action.requirements then
+        return true, nil
+    end
+
+    -------------------------------------------------------
+    -- Requirements may later contain:
+    --
+    -- hasWeapon
+    -- hasFood
+    -- hasTools
+    -- targetExists
+    -- sufficientHealth
+    -- sufficientEnergy
+    -- etc.
+    --
+    -- V1.0 only supports boolean/function requirements.
+    -------------------------------------------------------
+
+    for key, requirement in pairs(action.requirements) do
+
+        if type(requirement) == "boolean" then
+
+            if requirement == false then
+                return false, "requirement_failed:" .. tostring(key)
+            end
+
+        elseif type(requirement) == "function" then
+
+            local success, result, reason =
+                pcall(requirement, action)
+
+            if not success then
+
+                return false,
+                    "requirement_error:" .. tostring(key)
+
+            end
+
+            if result == false then
+
+                return false,
+                    reason or
+                    ("requirement_failed:" .. tostring(key))
+
+            end
+        end
+    end
+
+    return true, nil
+end
+
+-----------------------------------------------------------
+-- START ACTION
+-----------------------------------------------------------
+
+function ActionSystem.StartAction(actionId)
+
+    local action = ActionSystem.GetAction(actionId)
+
+    if not action then
+        Log("StartAction failed: action not found")
+        return false
+    end
+
+    -------------------------------------------------------
+    -- Only pending actions can start.
+    -------------------------------------------------------
+
+    if action.state ~= ActionSystem.State.PENDING then
+
+        Log(
+            "StartAction blocked: action " ..
+            tostring(action.id) ..
+            " is already " ..
+            tostring(action.state)
+        )
+
+        return false
+    end
+
+    -------------------------------------------------------
+    -- Requirements
+    -------------------------------------------------------
+
+    local requirementsMet, reason =
+        ActionSystem.CheckRequirements(action)
+
+    if not requirementsMet then
+
+        action.state = ActionSystem.State.FAILED
+        action.result = ActionSystem.Result.BLOCKED
+        action.reason = reason
+
+        ActionSystem.lastAction = action
+        ActionSystem.lastResult = action.result
+
+        Log(
+            "Action blocked: " ..
+            tostring(action.id) ..
+            " reason=" ..
+            tostring(reason)
+        )
+
+        if action.onFail then
+            pcall(action.onFail, action, reason)
+        end
+
+        return false
+    end
+
+    -------------------------------------------------------
+    -- Start
+    -------------------------------------------------------
+
+    action.state = ActionSystem.State.RUNNING
+    action.elapsed = 0
+    action._started = true
+
+    ActionSystem.lastAction = action
+
+    Log(
+        "Action started: " ..
+        tostring(action.id) ..
+        " [" ..
+        tostring(action.type) ..
+        "]"
+    )
+
+    -------------------------------------------------------
+    -- Callback
+    -------------------------------------------------------
+
+    if action.onStart then
+        local success, err =
+            pcall(action.onStart, action)
+
+        if not success then
+
+            Log(
+                "onStart error for " ..
+                tostring(action.id) ..
+                ": " ..
+                tostring(err)
+            )
+        end
+    end
+
+    -------------------------------------------------------
+    -- Instant action
+    -------------------------------------------------------
+
+    if action.duration <= 0 then
+        ActionSystem.CompleteAction(
+            action.id,
+            ActionSystem.Result.SUCCESS
+        )
+    end
+
+    return true
+end
+
+-----------------------------------------------------------
+-- UPDATE ACTION
+-----------------------------------------------------------
+
+function ActionSystem.UpdateAction(actionId, deltaTime)
+
+    local action = ActionSystem.GetAction(actionId)
+
+    if not action then
+        return false
+    end
+
+    if action.state ~= ActionSystem.State.RUNNING then
+        return false
+    end
+
+    deltaTime = tonumber(deltaTime) or 0
+
+    if deltaTime < 0 then
+        deltaTime = 0
+    end
+
+    -------------------------------------------------------
+    -- Update elapsed time
+    -------------------------------------------------------
+
+    action.elapsed =
+        action.elapsed + deltaTime
+
+    -------------------------------------------------------
+    -- Callback
+    -------------------------------------------------------
+
+    if action.onUpdate then
+
+        local success, result, reason =
+            pcall(
+                action.onUpdate,
+                action,
+                deltaTime
+            )
+
+        if not success then
+
+            Log(
+                "onUpdate error for " ..
+                tostring(action.id) ..
+                ": " ..
+                tostring(result)
+            )
+
+            ActionSystem.FailAction(
+                action.id,
+                ActionSystem.Result.FAILED,
+                "update_callback_error"
+            )
+
+            return false
+        end
+
+        ---------------------------------------------------
+        -- Callback may explicitly complete the action.
+        ---------------------------------------------------
+
+        if result == "complete" then
+
+            ActionSystem.CompleteAction(
+                action.id,
+                ActionSystem.Result.SUCCESS
+            )
+
+            return true
+
+        elseif result == "fail" then
+
+            ActionSystem.FailAction(
+                action.id,
+                ActionSystem.Result.FAILED,
+                reason
+            )
+
+            return false
+        end
+    end
+
+    -------------------------------------------------------
+    -- Duration completed
+    -------------------------------------------------------
+
+    if action.duration > 0
+        and action.elapsed >= action.duration then
+
+        ActionSystem.CompleteAction(
+            action.id,
+            ActionSystem.Result.SUCCESS
+        )
+    end
+
+    return true
+end
+
+-----------------------------------------------------------
+-- COMPLETE ACTION
+-----------------------------------------------------------
+
+function ActionSystem.CompleteAction(actionId, result, resultData)
+
+    local action = ActionSystem.GetAction(actionId)
+
+    if not action then
+        Log("CompleteAction failed: action not found")
+        return false
+    end
+
+    if action.state ~= ActionSystem.State.RUNNING then
+
+        Log(
+            "CompleteAction blocked: action " ..
+            tostring(action.id) ..
+            " is not running"
+        )
+
+        return false
+    end
+
+    action.state = ActionSystem.State.COMPLETED
+
+    action.result =
+        result or ActionSystem.Result.SUCCESS
+
+    action.resultData = resultData or nil
+
+    action._finished = true
+
+    ActionSystem.lastAction = action
+    ActionSystem.lastResult = action.result
+
+    Log(
+        "Action completed: " ..
+        tostring(action.id) ..
+        " result=" ..
+        tostring(action.result)
+    )
+
+    -------------------------------------------------------
+    -- Callback
+    -------------------------------------------------------
+
+    if action.onComplete then
+
+        local success, err =
+            pcall(
+                action.onComplete,
+                action,
+                action.result,
+                action.resultData
+            )
+
+        if not success then
+
+            Log(
+                "onComplete error for " ..
+                tostring(action.id) ..
+                ": " ..
+                tostring(err)
+            )
+        end
+    end
+
+    return true
+end
+
+-----------------------------------------------------------
+-- FAIL ACTION
+-----------------------------------------------------------
+
+function ActionSystem.FailAction(
+    actionId,
+    result,
+    reason,
+    resultData
+)
+
+    local action = ActionSystem.GetAction(actionId)
+
+    if not action then
+        Log("FailAction failed: action not found")
+        return false
+    end
+
+    if action.state ~= ActionSystem.State.RUNNING
+        and action.state ~= ActionSystem.State.PENDING then
+
+        Log(
+            "FailAction blocked: action " ..
+            tostring(action.id) ..
+            " is " ..
+            tostring(action.state)
+        )
+
+        return false
+    end
+
+    action.state = ActionSystem.State.FAILED
+
+    action.result =
+        result or ActionSystem.Result.FAILED
+
+    action.reason = reason
+    action.resultData = resultData or nil
+
+    action._finished = true
+
+    ActionSystem.lastAction = action
+    ActionSystem.lastResult = action.result
+
+    Log(
+        "Action failed: " ..
+        tostring(action.id) ..
+        " result=" ..
+        tostring(action.result) ..
+        " reason=" ..
+        tostring(reason)
+    )
+
+    if action.onFail then
+
+        local success, err =
+            pcall(
+                action.onFail,
+                action,
+                action.result,
+                action.reason,
+                action.resultData
+            )
+
+        if not success then
+
+            Log(
+                "onFail error for " ..
+                tostring(action.id) ..
+                ": " ..
+                tostring(err)
+            )
+        end
+    end
+
+    return true
+end
+
+-----------------------------------------------------------
+-- INTERRUPT ACTION
+-----------------------------------------------------------
+
+function ActionSystem.InterruptAction(actionId, reason)
+
+    local action = ActionSystem.GetAction(actionId)
+
+    if not action then
+        Log("InterruptAction failed: action not found")
+        return false
+    end
+
+    if action.state ~= ActionSystem.State.RUNNING then
+
+        Log(
+            "InterruptAction blocked: action " ..
+            tostring(action.id) ..
+            " is not running"
+        )
+
+        return false
+    end
+
+    if not action.interruptible then
+
+        Log(
+            "InterruptAction blocked: action " ..
+            tostring(action.id) ..
+            " is not interruptible"
+        )
+
+        return false
+    end
+
+    action.state = ActionSystem.State.INTERRUPTED
+
+    action.result =
+        ActionSystem.Result.INTERRUPTED
+
+    action.reason = reason or "interrupted"
+
+    action._finished = true
+
+    ActionSystem.lastAction = action
+    ActionSystem.lastResult = action.result
+
+    Log(
+        "Action interrupted: " ..
+        tostring(action.id) ..
+        " reason=" ..
+        tostring(action.reason)
+    )
+
+    if action.onInterrupt then
+
+        local success, err =
+            pcall(
+                action.onInterrupt,
+                action,
+                action.reason
+            )
+
+        if not success then
+
+            Log(
+                "onInterrupt error for " ..
+                tostring(action.id) ..
+                ": " ..
+                tostring(err)
+            )
+        end
+    end
+
+    return true
+end
+
+-----------------------------------------------------------
+-- CANCEL ACTION
+-----------------------------------------------------------
+
+function ActionSystem.CancelAction(actionId, reason)
+
+    local action = ActionSystem.GetAction(actionId)
+
+    if not action then
+        Log("CancelAction failed: action not found")
+        return false
+    end
+
+    if action.state ~= ActionSystem.State.PENDING
+        and action.state ~= ActionSystem.State.RUNNING then
+
+        Log(
+            "CancelAction blocked: action " ..
+            tostring(action.id) ..
+            " cannot be cancelled"
+        )
+
+        return false
+    end
+
+    action.state = ActionSystem.State.CANCELLED
+
+    action.result =
+        ActionSystem.Result.CANCELLED
+
+    action.reason = reason or "cancelled"
+
+    action._finished = true
+
+    ActionSystem.lastAction = action
+    ActionSystem.lastResult = action.result
+
+    Log(
+        "Action cancelled: " ..
+        tostring(action.id) ..
+        " reason=" ..
+        tostring(action.reason)
+    )
+
+    if action.onCancel then
+
+        local success, err =
+            pcall(
+                action.onCancel,
+                action,
+                action.reason
+            )
+
+        if not success then
+
+            Log(
+                "onCancel error for " ..
+                tostring(action.id) ..
+                ": " ..
+                tostring(err)
+            )
+        end
+    end
+
+    return true
+end
+
+-----------------------------------------------------------
+-- UPDATE ALL RUNNING ACTIONS
+-----------------------------------------------------------
+
+function ActionSystem.Update(deltaTime)
+
+    for actionId, action in pairs(ActionSystem.actions) do
+
+        if action.state == ActionSystem.State.RUNNING then
+
+            ActionSystem.UpdateAction(
+                actionId,
+                deltaTime
+            )
+        end
+    end
+end
+
+-----------------------------------------------------------
+-- REMOVE ACTION
+-----------------------------------------------------------
+
+function ActionSystem.RemoveAction(actionId)
+
+    if not actionId then
+        return false
+    end
+
+    if not ActionSystem.actions[actionId] then
+        return false
+    end
+
+    ActionSystem.actions[actionId] = nil
+
+    return true
+end
+
+-----------------------------------------------------------
+-- CLEAR ALL ACTIONS
+-----------------------------------------------------------
+
+function ActionSystem.Clear()
+
+    ActionSystem.actions = {}
+    ActionSystem.nextActionId = 1
+    ActionSystem.lastAction = nil
+    ActionSystem.lastResult = nil
+
+    Log("All actions cleared")
+
+    return true
+end
+
+-----------------------------------------------------------
+-- GET CURRENT ACTIONS
+-----------------------------------------------------------
+
+function ActionSystem.GetActions()
+
+    return ActionSystem.actions
+end
+
+-----------------------------------------------------------
+-- GET LAST ACTION
+-----------------------------------------------------------
+
+function ActionSystem.GetLastAction()
+
+    return ActionSystem.lastAction
+end
+
+-----------------------------------------------------------
+-- GET LAST RESULT
+-----------------------------------------------------------
+
+function ActionSystem.GetLastResult()
+
+    return ActionSystem.lastResult
+end
+
+-----------------------------------------------------------
+-- INITIALIZE
+-----------------------------------------------------------
+
+function ActionSystem.Initialize()
+
+    if ActionSystem.initialized then
+
+        Log("Already initialized")
+
+        return true
+    end
+
+    ActionSystem.initialized = true
+
+    Log(
+        "Initialized Action System " ..
+        ActionSystem.Version
+    )
+
+    return true
+end
+
+-----------------------------------------------------------
+-- EXPORT
+-----------------------------------------------------------
+
+BAO.ActionSystem = ActionSystem
+
+Log(
+    "BAO_ActionSystem.lua loaded - " ..
+    ActionSystem.Version
+)
+
+===== ACTION EXECUTOR =====
+-- ============================================================
+-- BanditsAIOverhaul
+-- BAO_ActionExecutor.lua
+--
+-- Action Executor V1.0
+--
+-- Purpose:
+--   Converts abstract actions from BAO_ActionSystem
+--   into executable plans.
+--
+-- Architecture:
+--
+--   Decision
+--      в†“
+--   AIController
+--      в†“
+--   ActionSystem
+--      в†“
+--   ActionExecutor
+--      в†“
+--   Navigation / Animation / Interaction / Combat
+--
+-- IMPORTANT:
+--   V1.0 does NOT directly control NPC movement,
+--   animation or combat.
+--
+--   It provides the execution layer that those systems
+--   will use later.
+-- ============================================================
+
+local ActionExecutor = {}
+
+-- ============================================================
+-- VERSION
+-- ============================================================
+
+ActionExecutor.VERSION = "1.0"
+
+-- ============================================================
+-- EXECUTION STATES
+-- ============================================================
+
+ActionExecutor.STATES = {
+    IDLE = "IDLE",
+    PREPARING = "PREPARING",
+    EXECUTING = "EXECUTING",
+    COMPLETED = "COMPLETED",
+    FAILED = "FAILED",
+    INTERRUPTED = "INTERRUPTED",
+    CANCELLED = "CANCELLED"
+}
+
+-- ============================================================
+-- EXECUTION RESULTS
+-- ============================================================
+
+ActionExecutor.RESULTS = {
+    SUCCESS = "SUCCESS",
+    FAILED = "FAILED",
+    BLOCKED = "BLOCKED",
+    INTERRUPTED = "INTERRUPTED",
+    CANCELLED = "CANCELLED",
+    TIMEOUT = "TIMEOUT"
+}
+
+-- ============================================================
+-- EXECUTOR TYPES
+-- ============================================================
+
+ActionExecutor.TYPES = {
+    GENERIC = "generic",
+    PATROL = "patrol",
+    EXPLORE = "explore",
+    GATHER_RESOURCES = "gather_resources",
+    GUARD = "guard",
+    HELP_ALLY = "help_ally",
+    REST = "rest",
+    HEAL = "heal",
+    RETREAT = "retreat",
+    COMBAT = "combat"
+}
+
+-- ============================================================
+-- RUNTIME
+-- ============================================================
+
+ActionExecutor.initialized = false
+ActionExecutor.attempts = 0
+
+ActionExecutor.currentExecution = nil
+ActionExecutor.lastExecution = nil
+
+ActionExecutor.executionHistory = {}
+ActionExecutor.maxHistory = 20
+
+ActionExecutor.nextExecutionId = 1
+
+ActionExecutor.statistics = {
+    executionsCreated = 0,
+    executionsStarted = 0,
+    executionsCompleted = 0,
+    executionsFailed = 0,
+    executionsInterrupted = 0,
+    executionsCancelled = 0,
+    executionsTimedOut = 0
+}
+
+-- ============================================================
+-- LOGGING
+-- ============================================================
+
+local function Log(message)
+    print("[BAO][BAO_ActionExecutor] " .. tostring(message))
+end
+
+-- ============================================================
+-- HELPERS
+-- ============================================================
+
+local function GetActionSystem()
+    if BAO and BAO.ActionSystem then
+        return BAO.ActionSystem
+    end
+
+    return nil
+end
+
+local function GetCurrentTime()
+    return os.time() * 1000
+end
+
+local function GenerateExecutionId()
+    local id = "bao_execution_" .. tostring(ActionExecutor.nextExecutionId)
+
+    ActionExecutor.nextExecutionId =
+        ActionExecutor.nextExecutionId + 1
+
+    return id
+end
+
+local function AddHistory(execution)
+    if not execution then
+        return
+    end
+
+    table.insert(
+        ActionExecutor.executionHistory,
+        execution
+    )
+
+    while #ActionExecutor.executionHistory >
+        ActionExecutor.maxHistory do
+
+        table.remove(
+            ActionExecutor.executionHistory,
+            1
+        )
+    end
+end
+
+-- ============================================================
+-- ACTION в†’ EXECUTOR TYPE
+-- ============================================================
+
+function ActionExecutor.GetExecutorType(actionType)
+
+    if not actionType then
+        return ActionExecutor.TYPES.GENERIC
+    end
+
+    if actionType == "patrol" then
+        return ActionExecutor.TYPES.PATROL
+
+    elseif actionType == "explore" then
+        return ActionExecutor.TYPES.EXPLORE
+
+    elseif actionType == "gather_resources" then
+        return ActionExecutor.TYPES.GATHER_RESOURCES
+
+    elseif actionType == "guard" then
+        return ActionExecutor.TYPES.GUARD
+
+    elseif actionType == "help_ally" then
+        return ActionExecutor.TYPES.HELP_ALLY
+
+    elseif actionType == "rest" then
+        return ActionExecutor.TYPES.REST
+
+    elseif actionType == "heal" then
+        return ActionExecutor.TYPES.HEAL
+
+    elseif actionType == "retreat" then
+        return ActionExecutor.TYPES.RETREAT
+
+    elseif actionType == "combat" then
+        return ActionExecutor.TYPES.COMBAT
+    end
+
+    return ActionExecutor.TYPES.GENERIC
+end
+
+-- ============================================================
+-- EXECUTION PLAN
+-- ============================================================
+
+function ActionExecutor.CreatePlan(
+    action,
+    metadata
+)
+
+    if not action then
+        return nil
+    end
+
+    local actionType = action.type or action.actionType
+
+    local executorType =
+        ActionExecutor.GetExecutorType(actionType)
+
+    local plan = {
+        executorType = executorType,
+
+        actionType = actionType,
+
+        steps = {
+            "prepare",
+            "execute",
+            "finish"
+        },
+
+        currentStep = "prepare",
+
+        navigationRequired = false,
+        animationRequired = false,
+        interactionRequired = false,
+        combatRequired = false,
+
+        interruptible = true,
+
+        metadata = metadata or {}
+    }
+
+    -- --------------------------------------------------------
+    -- Future subsystem requirements
+    -- --------------------------------------------------------
+
+    if executorType == ActionExecutor.TYPES.PATROL then
+        plan.navigationRequired = true
+        plan.animationRequired = true
+
+    elseif executorType == ActionExecutor.TYPES.EXPLORE then
+        plan.navigationRequired = true
+        plan.animationRequired = true
+
+    elseif executorType ==
+        ActionExecutor.TYPES.GATHER_RESOURCES then
+
+        plan.navigationRequired = true
+        plan.animationRequired = true
+        plan.interactionRequired = true
+
+    elseif executorType == ActionExecutor.TYPES.GUARD then
+        plan.navigationRequired = true
+        plan.animationRequired = true
+
+    elseif executorType == ActionExecutor.TYPES.HELP_ALLY then
+        plan.navigationRequired = true
+        plan.animationRequired = true
+        plan.interactionRequired = true
+
+    elseif executorType == ActionExecutor.TYPES.REST then
+        plan.navigationRequired = true
+        plan.animationRequired = true
+
+    elseif executorType == ActionExecutor.TYPES.HEAL then
+        plan.navigationRequired = true
+        plan.animationRequired = true
+        plan.interactionRequired = true
+
+    elseif executorType == ActionExecutor.TYPES.RETREAT then
+        plan.navigationRequired = true
+        plan.animationRequired = true
+
+    elseif executorType == ActionExecutor.TYPES.COMBAT then
+        plan.navigationRequired = true
+        plan.animationRequired = true
+        plan.combatRequired = true
+    end
+
+    return plan
+end
+
+-- ============================================================
+-- CREATE EXECUTION
+-- ============================================================
+
+function ActionExecutor.CreateExecution(
+    actionId,
+    action,
+    metadata
+)
+
+    if not action then
+        return nil
+    end
+
+    local execution = {
+        id = GenerateExecutionId(),
+
+        actionId = actionId,
+
+        actionType =
+            action.type or action.actionType,
+
+        executorType =
+            ActionExecutor.GetExecutorType(
+                action.type or action.actionType
+            ),
+
+        state = ActionExecutor.STATES.IDLE,
+
+        result = nil,
+
+        reason = nil,
+
+        createdAt = GetCurrentTime(),
+
+        startedAt = nil,
+
+        finishedAt = nil,
+
+        elapsedTime = 0,
+
+        attempts = 0,
+
+        maxAttempts = 3,
+
+        timeout = nil,
+
+        plan = nil,
+
+        metadata = metadata or {}
+    }
+
+    execution.plan =
+        ActionExecutor.CreatePlan(
+            action,
+            metadata
+        )
+
+    ActionExecutor.statistics.executionsCreated =
+        ActionExecutor.statistics.executionsCreated + 1
+
+    return execution
+end
+
+-- ============================================================
+-- VALIDATION
+-- ============================================================
+
+function ActionExecutor.ValidateExecution(execution)
+
+    if not execution then
+        return false, "missing_execution"
+    end
+
+    if not execution.actionId then
+        return false, "missing_action_id"
+    end
+
+    if not execution.actionType then
+        return false, "missing_action_type"
+    end
+
+    if not execution.plan then
+        return false, "missing_execution_plan"
+    end
+
+    return true, nil
+end
+
+-- ============================================================
+-- START
+-- ============================================================
+
+function ActionExecutor.StartExecution(execution)
+
+    if not execution then
+        return false, "missing_execution"
+    end
+
+    local valid, reason =
+        ActionExecutor.ValidateExecution(execution)
+
+    if not valid then
+        execution.state =
+            ActionExecutor.STATES.FAILED
+
+        execution.result =
+            ActionExecutor.RESULTS.FAILED
+
+        execution.reason = reason
+
+        return false, reason
+    end
+
+    if ActionExecutor.currentExecution then
+        return false, "execution_already_active"
+    end
+
+    execution.state =
+        ActionExecutor.STATES.PREPARING
+
+    execution.startedAt = GetCurrentTime()
+
+    execution.attempts =
+        execution.attempts + 1
+
+    ActionExecutor.currentExecution =
+        execution
+
+    ActionExecutor.statistics.executionsStarted =
+        ActionExecutor.statistics.executionsStarted + 1
+
+    Log(
+        "Execution started: "
+        .. tostring(execution.id)
+        .. " ["
+        .. tostring(execution.actionType)
+        .. "]"
+    )
+
+    return true, nil
+end
+
+-- ============================================================
+-- PREPARE
+-- ============================================================
+
+function ActionExecutor.PrepareExecution(execution)
+
+    if not execution then
+        return false, "missing_execution"
+    end
+
+    if execution.state ~=
+        ActionExecutor.STATES.PREPARING then
+
+        return false, "invalid_state"
+    end
+
+    execution.plan.currentStep =
+        "execute"
+
+    execution.state =
+        ActionExecutor.STATES.EXECUTING
+
+    return true, nil
+end
+
+-- ============================================================
+-- EXECUTE
+-- ============================================================
+
+function ActionExecutor.ExecuteStep(execution)
+
+    if not execution then
+        return false, "missing_execution"
+    end
+
+    if execution.state ~=
+        ActionExecutor.STATES.EXECUTING then
+
+        return false, "invalid_state"
+    end
+
+    -- --------------------------------------------------------
+    -- V1.0:
+    --
+    -- The actual physical execution is intentionally deferred.
+    --
+    -- Future systems will be called here:
+    --
+    -- Navigation
+    -- Animation
+    -- Interaction
+    -- Combat
+    --
+    -- For now we maintain a valid execution state.
+    -- --------------------------------------------------------
+
+    return true, nil
+end
+
+-- ============================================================
+-- COMPLETE
+-- ============================================================
+
+function ActionExecutor.CompleteExecution(
+    execution,
+    reason
+)
+
+    if not execution then
+        return false
+    end
+
+    execution.state =
+        ActionExecutor.STATES.COMPLETED
+
+    execution.result =
+        ActionExecutor.RESULTS.SUCCESS
+
+    execution.reason =
+        reason or "completed"
+
+    execution.finishedAt =
+        GetCurrentTime()
+
+    if execution.startedAt then
+        execution.elapsedTime =
+            execution.finishedAt
+            - execution.startedAt
+    end
+
+    ActionExecutor.lastExecution =
+        execution
+
+    ActionExecutor.currentExecution =
+        nil
+
+    ActionExecutor.statistics.executionsCompleted =
+        ActionExecutor.statistics.executionsCompleted + 1
+
+    AddHistory(execution)
+
+    Log(
+        "Execution completed: "
+        .. tostring(execution.id)
+    )
+
+    return true
+end
+
+-- ============================================================
+-- FAIL
+-- ============================================================
+
+function ActionExecutor.FailExecution(
+    execution,
+    reason
+)
+
+    if not execution then
+        return false
+    end
+
+    execution.state =
+        ActionExecutor.STATES.FAILED
+
+    execution.result =
+        ActionExecutor.RESULTS.FAILED
+
+    execution.reason =
+        reason or "failed"
+
+    execution.finishedAt =
+        GetCurrentTime()
+
+    if execution.startedAt then
+        execution.elapsedTime =
+            execution.finishedAt
+            - execution.startedAt
+    end
+
+    ActionExecutor.lastExecution =
+        execution
+
+    ActionExecutor.currentExecution =
+        nil
+
+    ActionExecutor.statistics.executionsFailed =
+        ActionExecutor.statistics.executionsFailed + 1
+
+    AddHistory(execution)
+
+    Log(
+        "Execution failed: "
+        .. tostring(execution.id)
+        .. " reason="
+        .. tostring(execution.reason)
+    )
+
+    return true
+end
+
+-- ============================================================
+-- INTERRUPT
+-- ============================================================
+
+function ActionExecutor.InterruptExecution(
+    execution,
+    reason
+)
+
+    if not execution then
+        return false
+    end
+
+    execution.state =
+        ActionExecutor.STATES.INTERRUPTED
+
+    execution.result =
+        ActionExecutor.RESULTS.INTERRUPTED
+
+    execution.reason =
+        reason or "interrupted"
+
+    execution.finishedAt =
+        GetCurrentTime()
+
+    if execution.startedAt then
+        execution.elapsedTime =
+            execution.finishedAt
+            - execution.startedAt
+    end
+
+    ActionExecutor.lastExecution =
+        execution
+
+    ActionExecutor.currentExecution =
+        nil
+
+    ActionExecutor.statistics.executionsInterrupted =
+        ActionExecutor.statistics.executionsInterrupted + 1
+
+    AddHistory(execution)
+
+    Log(
+        "Execution interrupted: "
+        .. tostring(execution.id)
+        .. " reason="
+        .. tostring(execution.reason)
+    )
+
+    return true
+end
+
+-- ============================================================
+-- CANCEL
+-- ============================================================
+
+function ActionExecutor.CancelExecution(
+    execution,
+    reason
+)
+
+    if not execution then
+        return false
+    end
+
+    execution.state =
+        ActionExecutor.STATES.CANCELLED
+
+    execution.result =
+        ActionExecutor.RESULTS.CANCELLED
+
+    execution.reason =
+        reason or "cancelled"
+
+    execution.finishedAt =
+        GetCurrentTime()
+
+    if execution.startedAt then
+        execution.elapsedTime =
+            execution.finishedAt
+            - execution.startedAt
+    end
+
+    ActionExecutor.lastExecution =
+        execution
+
+    ActionExecutor.currentExecution =
+        nil
+
+    ActionExecutor.statistics.executionsCancelled =
+        ActionExecutor.statistics.executionsCancelled + 1
+
+    AddHistory(execution)
+
+    Log(
+        "Execution cancelled: "
+        .. tostring(execution.id)
+    )
+
+    return true
+end
+
+-- ============================================================
+-- UPDATE
+-- ============================================================
+
+function ActionExecutor.Update()
+
+    local execution =
+        ActionExecutor.currentExecution
+
+    if not execution then
+        return
+    end
+
+    local now = GetCurrentTime()
+
+    if execution.startedAt then
+        execution.elapsedTime =
+            now - execution.startedAt
+    end
+
+    if execution.state ==
+        ActionExecutor.STATES.PREPARING then
+
+        ActionExecutor.PrepareExecution(execution)
+
+        return
+    end
+
+    if execution.state ==
+        ActionExecutor.STATES.EXECUTING then
+
+        ActionExecutor.ExecuteStep(execution)
+
+        return
+    end
+end
+
+-- ============================================================
+-- GET CURRENT EXECUTION
+-- ============================================================
+
+function ActionExecutor.GetCurrentExecution()
+    return ActionExecutor.currentExecution
+end
+
+-- ============================================================
+-- GET LAST EXECUTION
+-- ============================================================
+
+function ActionExecutor.GetLastExecution()
+    return ActionExecutor.lastExecution
+end
+
+-- ============================================================
+-- GET HISTORY
+-- ============================================================
+
+function ActionExecutor.GetExecutionHistory()
+    return ActionExecutor.executionHistory
+end
+
+-- ============================================================
+-- GET STATISTICS
+-- ============================================================
+
+function ActionExecutor.GetStatistics()
+    return ActionExecutor.statistics
+end
+
+-- ============================================================
+-- GET STATUS
+-- ============================================================
+
+function ActionExecutor.GetStatus()
+
+    return {
+        initialized =
+            ActionExecutor.initialized,
+
+        version =
+            ActionExecutor.VERSION,
+
+        attempts =
+            ActionExecutor.attempts,
+
+        currentExecution =
+            ActionExecutor.currentExecution,
+
+        lastExecution =
+            ActionExecutor.lastExecution,
+
+        historyCount =
+            #ActionExecutor.executionHistory,
+
+        statistics =
+            ActionExecutor.statistics
+    }
+end
+
+-- ============================================================
+-- RESET
+-- ============================================================
+
+function ActionExecutor.Reset()
+
+    ActionExecutor.currentExecution = nil
+    ActionExecutor.lastExecution = nil
+
+    ActionExecutor.executionHistory = {}
+
+    ActionExecutor.nextExecutionId = 1
+
+    ActionExecutor.statistics = {
+        executionsCreated = 0,
+        executionsStarted = 0,
+        executionsCompleted = 0,
+        executionsFailed = 0,
+        executionsInterrupted = 0,
+        executionsCancelled = 0,
+        executionsTimedOut = 0
+    }
+
+    Log("Action Executor reset")
+end
+
+-- ============================================================
+-- INITIALIZE
+-- ============================================================
+
+function ActionExecutor.Initialize()
+
+    ActionExecutor.attempts =
+        ActionExecutor.attempts + 1
+
+    Log(
+        "Initialize attempt #"
+        .. tostring(ActionExecutor.attempts)
+    )
+
+    if ActionExecutor.initialized then
+        return true
+    end
+
+    local actionSystem =
+        GetActionSystem()
+
+    if not actionSystem then
+        Log(
+            "WARNING: ActionSystem not available yet"
+        )
+
+        return false
+    end
+
+    ActionExecutor.initialized = true
+
+    Log(
+        "Action Executor initialized V"
+        .. ActionExecutor.VERSION
+    )
+
+    return true
+end
+
+-- ============================================================
+-- GAME EVENTS
+-- ============================================================
+
+if Events and Events.OnGameStart then
+
+    Events.OnGameStart.Add(
+        function()
+
+            Log("OnGameStart")
+
+            ActionExecutor.Initialize()
+
+        end
+    )
+
+end
+
+if Events and Events.OnTick then
+
+    Events.OnTick.Add(
+        function()
+
+            if ActionExecutor.initialized then
+                ActionExecutor.Update()
+            end
+
+        end
+    )
+
+end
+
+-- ============================================================
+-- EXPORT
+-- ============================================================
+
+BAO = BAO or {}
+
+BAO.ActionExecutor = ActionExecutor
+
+Log(
+    "Action Executor V"
+    .. ActionExecutor.VERSION
+    .. " module loaded"
+)
+
+===== AI CONTROLLER =====
+-----------------------------------------------------------
+-- BanditsAIOverhaul
+-- BAO_AIController.lua
+--
+-- AI Controller V1.0
+--
+-- Architecture:
+--
+-- BehaviorProfile
+--       в†“
+-- DecisionSystem
+--       в†“
+-- AIController
+--       в†“
+-- ActionSystem
+--       в†“
+-- Action
+--
+-- V1.0:
+-- - Connects DecisionSystem with ActionSystem
+-- - Maintains current AI decision
+-- - Maintains current action
+-- - Creates actions from decisions
+-- - Detects decision changes
+-- - Interrupts obsolete actions
+-- - Starts new actions
+-- - Tracks action results
+-- - Tracks controller state
+-- - Provides debug getters
+--
+-- IMPORTANT:
+-- This version does NOT directly control physical NPCs.
+-- Movement, navigation, animation and real NPC objects
+-- will be connected in later systems.
+-----------------------------------------------------------
+
+BAO = BAO or {}
+
+local AIController = {}
+
+-----------------------------------------------------------
+-- VERSION
+-----------------------------------------------------------
+
+AIController.Version = "V1.0"
+
+local MODULE_NAME = "BAO_AIController"
+
+-----------------------------------------------------------
+-- LOG
+-----------------------------------------------------------
+
+local function Log(message)
+
+    print(
+        "[BAO][" ..
+        MODULE_NAME ..
+        "] " ..
+        tostring(message)
+    )
+
+end
+
+-----------------------------------------------------------
+-- CONTROLLER STATES
+-----------------------------------------------------------
+
+AIController.State = {
+
+    IDLE = "idle",
+    THINKING = "thinking",
+    EXECUTING = "executing",
+    WAITING = "waiting",
+    INTERRUPTING = "interrupting",
+    ERROR = "error"
+
+}
+
+-----------------------------------------------------------
+-- DECISION -> ACTION MAPPING
+-----------------------------------------------------------
+--
+-- This is intentionally separate from DecisionSystem.
+--
+-- DecisionSystem answers:
+--
+-- "What does the AI want to do?"
+--
+-- AIController answers:
+--
+-- "What Action represents that decision?"
+--
+-- Later these mappings can become much more intelligent.
+-----------------------------------------------------------
+
+local DECISION_ACTIONS = {
+
+    patrol = "patrol",
+
+    explore = "explore",
+
+    gather_resources = "gather_resources",
+
+    guard = "guard",
+
+    help_ally = "help_ally",
+
+    rest = "rest",
+
+    heal = "heal",
+
+    retreat = "retreat",
+
+    combat = "combat"
+
+}
+
+-----------------------------------------------------------
+-- RUNTIME STATE
+-----------------------------------------------------------
+
+local initialized = false
+
+local attempts = 0
+
+local controllerState =
+    AIController.State.IDLE
+
+-----------------------------------------------------------
+-- DECISION STATE
+-----------------------------------------------------------
+
+local currentDecision = nil
+
+local previousDecision = nil
+
+-----------------------------------------------------------
+-- ACTION STATE
+-----------------------------------------------------------
+
+local currentAction = nil
+
+local currentActionId = nil
+
+local lastAction = nil
+
+local lastActionResult = nil
+
+-----------------------------------------------------------
+-- HISTORY
+-----------------------------------------------------------
+
+local actionHistory = {}
+
+local MAX_HISTORY = 20
+
+-----------------------------------------------------------
+-- STATISTICS
+-----------------------------------------------------------
+
+local statistics = {
+
+    decisionsProcessed = 0,
+
+    actionsCreated = 0,
+
+    actionsStarted = 0,
+
+    actionsCompleted = 0,
+
+    actionsFailed = 0,
+
+    actionsInterrupted = 0
+
+}
+
+-----------------------------------------------------------
+-- CONTROLLER ID
+-----------------------------------------------------------
+--
+-- V1.0 has one global controller.
+--
+-- The architecture intentionally keeps an identity field
+-- so that later this can become one controller per NPC.
+-----------------------------------------------------------
+
+local controllerId = "bao_ai_controller_001"
+
+-----------------------------------------------------------
+-- UTILITY
+-----------------------------------------------------------
+
+local function AddHistory(entry)
+
+    if not entry then
+        return
+    end
+
+    table.insert(
+        actionHistory,
+        entry
+    )
+
+    while #actionHistory > MAX_HISTORY do
+
+        table.remove(
+            actionHistory,
+            1
+        )
+
+    end
+
+end
+
+-----------------------------------------------------------
+-- GET DECISION SYSTEM
+-----------------------------------------------------------
+
+local function GetDecisionSystem()
+
+    if not BAO.DecisionSystem then
+
+        Log(
+            "DecisionSystem unavailable"
+        )
+
+        return nil
+
+    end
+
+    return BAO.DecisionSystem
+
+end
+
+-----------------------------------------------------------
+-- GET ACTION SYSTEM
+-----------------------------------------------------------
+
+local function GetActionSystem()
+
+    if not BAO.ActionSystem then
+
+        Log(
+            "ActionSystem unavailable"
+        )
+
+        return nil
+
+    end
+
+    return BAO.ActionSystem
+
+end
+
+-----------------------------------------------------------
+-- GET CURRENT DECISION
+-----------------------------------------------------------
+
+local function ReadDecision()
+
+    local decisionSystem =
+        GetDecisionSystem()
+
+    if not decisionSystem then
+        return nil
+    end
+
+    if decisionSystem.GetCurrentDecision then
+
+        return
+            decisionSystem.GetCurrentDecision()
+
+    end
+
+    if decisionSystem.Get then
+
+        return
+            decisionSystem.Get()
+
+    end
+
+    return nil
+
+end
+
+-----------------------------------------------------------
+-- GET ACTION TYPE
+-----------------------------------------------------------
+
+local function GetActionType(decision)
+
+    if not decision then
+        return nil
+    end
+
+    if not decision.ID then
+        return nil
+    end
+
+    return DECISION_ACTIONS[
+        decision.ID
+    ]
+
+end
+
+-----------------------------------------------------------
+-- CHECK CURRENT ACTION
+-----------------------------------------------------------
+
+local function RefreshCurrentAction()
+
+    if not currentActionId then
+
+        currentAction = nil
+
+        return nil
+
+    end
+
+    local actionSystem =
+        GetActionSystem()
+
+    if not actionSystem then
+        return currentAction
+    end
+
+    currentAction =
+        actionSystem.GetAction(
+            currentActionId
+        )
+
+    return currentAction
+
+end
+
+-----------------------------------------------------------
+-- ACTION FINISHED?
+-----------------------------------------------------------
+
+local function IsActionFinished(action)
+
+    if not action then
+        return true
+    end
+
+    local state =
+        action.state
+
+    local actionSystem =
+        GetActionSystem()
+
+    if not actionSystem then
+        return false
+    end
+
+    return
+        state == actionSystem.State.COMPLETED
+        or
+        state == actionSystem.State.FAILED
+        or
+        state == actionSystem.State.INTERRUPTED
+        or
+        state == actionSystem.State.CANCELLED
+
+end
+
+-----------------------------------------------------------
+-- RECORD ACTION RESULT
+-----------------------------------------------------------
+
+local function RecordActionResult(action)
+
+    if not action then
+        return
+    end
+
+    lastAction = action
+
+    lastActionResult = {
+
+        ActionId = action.id,
+
+        ActionType = action.type,
+
+        State = action.state,
+
+        Result = action.result,
+
+        Reason = action.reason,
+
+        Decision =
+            currentDecision
+                and currentDecision.ID
+                or nil
+
+    }
+
+    if action.state == "completed" then
+
+        statistics.actionsCompleted =
+            statistics.actionsCompleted + 1
+
+    elseif action.state == "failed" then
+
+        statistics.actionsFailed =
+            statistics.actionsFailed + 1
+
+    elseif action.state == "interrupted" then
+
+        statistics.actionsInterrupted =
+            statistics.actionsInterrupted + 1
+
+    end
+
+    AddHistory({
+
+        ActionId = action.id,
+
+        ActionType = action.type,
+
+        State = action.state,
+
+        Result = action.result,
+
+        Reason = action.reason,
+
+        Decision =
+            currentDecision
+                and currentDecision.ID
+                or nil
+
+    })
+
+end
+
+-----------------------------------------------------------
+-- CREATE ACTION FOR DECISION
+-----------------------------------------------------------
+
+local function CreateActionForDecision(decision)
+
+    if not decision then
+
+        Log(
+            "Cannot create action: decision is nil"
+        )
+
+        return nil
+
+    end
+
+    local actionType =
+        GetActionType(decision)
+
+    if not actionType then
+
+        Log(
+            "No action mapping for decision: " ..
+            tostring(decision.ID)
+        )
+
+        return nil
+
+    end
+
+    local actionSystem =
+        GetActionSystem()
+
+    if not actionSystem then
+        return nil
+    end
+
+    -------------------------------------------------------
+    -- The controller action is intentionally long-lived.
+    --
+    -- The ActionSystem currently represents execution time
+    -- abstractly. Physical completion will later come from
+    -- Navigation / Combat / Activity systems.
+    --
+    -- Therefore the controller keeps the action running
+    -- until:
+    --
+    -- 1. a new decision replaces it
+    -- 2. another system completes/fails it
+    -- 3. the controller interrupts it
+    -------------------------------------------------------
+
+    local action =
+        actionSystem.CreateAction(
+
+            actionType,
+
+            {
+
+                priority =
+                    decision.Priority or 0,
+
+                duration = 3600,
+
+                interruptible = true,
+
+                metadata = {
+
+                    controllerId =
+                        controllerId,
+
+                    decisionId =
+                        decision.ID,
+
+                    decisionScore =
+                        decision.Score,
+
+                    source =
+                        "DecisionSystem"
+
+                },
+
+                onStart =
+                    function(startedAction)
+
+                        Log(
+                            "Action execution started: " ..
+                            tostring(startedAction.type)
+                        )
+
+                    end,
+
+                onComplete =
+                    function(
+                        completedAction,
+                        result,
+                        resultData
+                    )
+
+                        Log(
+                            "Action completed: " ..
+                            tostring(
+                                completedAction.type
+                            )
+                        )
+
+                    end,
+
+                onFail =
+                    function(
+                        failedAction,
+                        result,
+                        reason
+                    )
+
+                        Log(
+                            "Action failed: " ..
+                            tostring(
+                                failedAction.type
+                            ) ..
+                            " reason=" ..
+                            tostring(reason)
+                        )
+
+                    end,
+
+                onInterrupt =
+                    function(
+                        interruptedAction,
+                        reason
+                    )
+
+                        Log(
+                            "Action interrupted: " ..
+                            tostring(
+                                interruptedAction.type
+                            ) ..
+                            " reason=" ..
+                            tostring(reason)
+                        )
+
+                    end
+
+            }
+
+        )
+
+    return action
+
+end
+
+-----------------------------------------------------------
+-- START ACTION FOR DECISION
+-----------------------------------------------------------
+
+local function StartActionForDecision(decision)
+
+    if not decision then
+        return false
+    end
+
+    local actionSystem =
+        GetActionSystem()
+
+    if not actionSystem then
+        return false
+    end
+
+    local action =
+        CreateActionForDecision(
+            decision
+        )
+
+    if not action then
+
+        controllerState =
+            AIController.State.ERROR
+
+        return false
+
+    end
+
+    statistics.actionsCreated =
+        statistics.actionsCreated + 1
+
+    local registered =
+        actionSystem.RegisterAction(
+            action
+        )
+
+    if not registered then
+
+        Log(
+            "Failed to register action: " ..
+            tostring(action.id)
+        )
+
+        controllerState =
+            AIController.State.ERROR
+
+        return false
+
+    end
+
+    local started =
+        actionSystem.StartAction(
+            action.id
+        )
+
+    if not started then
+
+        Log(
+            "Failed to start action: " ..
+            tostring(action.id)
+        )
+
+        controllerState =
+            AIController.State.ERROR
+
+        return false
+
+    end
+
+    currentActionId =
+        action.id
+
+    currentAction =
+        action
+
+    statistics.actionsStarted =
+        statistics.actionsStarted + 1
+
+    controllerState =
+        AIController.State.EXECUTING
+
+    Log(
+        "Controller started action: " ..
+        tostring(action.type) ..
+        " for decision=" ..
+        tostring(decision.ID)
+    )
+
+    return true
+
+end
+
+-----------------------------------------------------------
+-- INTERRUPT CURRENT ACTION
+-----------------------------------------------------------
+
+local function InterruptCurrentAction(reason)
+
+    RefreshCurrentAction()
+
+    if not currentAction then
+        return false
+    end
+
+    if IsActionFinished(currentAction) then
+
+        RecordActionResult(
+            currentAction
+        )
+
+        return false
+
+    end
+
+    local actionSystem =
+        GetActionSystem()
+
+    if not actionSystem then
+        return false
+    end
+
+    controllerState =
+        AIController.State.INTERRUPTING
+
+    local interrupted =
+        actionSystem.InterruptAction(
+
+            currentAction.id,
+
+            reason or
+                "controller_interrupt"
+
+        )
+
+    if interrupted then
+
+        RefreshCurrentAction()
+
+        RecordActionResult(
+            currentAction
+        )
+
+        Log(
+            "Current action interrupted: " ..
+            tostring(
+                currentAction.id
+            )
+        )
+
+        currentAction = nil
+        currentActionId = nil
+
+        return true
+
+    end
+
+    return false
+
+end
+
+-----------------------------------------------------------
+-- APPLY NEW DECISION
+-----------------------------------------------------------
+
+local function ApplyDecision(decision)
+
+    if not decision then
+        return false
+    end
+
+    local newDecisionId =
+        decision.ID
+
+    if not newDecisionId then
+
+        Log(
+            "Decision has no ID"
+        )
+
+        return false
+
+    end
+
+    -------------------------------------------------------
+    -- First decision
+    -------------------------------------------------------
+
+    if currentDecision == nil then
+
+        previousDecision = nil
+
+        currentDecision =
+            decision
+
+        statistics.decisionsProcessed =
+            statistics.decisionsProcessed + 1
+
+        Log(
+            "Controller received initial decision: " ..
+            tostring(newDecisionId)
+        )
+
+        return
+            StartActionForDecision(
+                decision
+            )
+
+    end
+
+    -------------------------------------------------------
+    -- Same decision
+    -------------------------------------------------------
+
+    if currentDecision.ID ==
+        newDecisionId then
+
+        currentDecision =
+            decision
+
+        return true
+
+    end
+
+    -------------------------------------------------------
+    -- Decision changed
+    -------------------------------------------------------
+
+    previousDecision =
+        currentDecision
+
+    currentDecision =
+        decision
+
+    statistics.decisionsProcessed =
+        statistics.decisionsProcessed + 1
+
+    Log(
+        "Controller decision changed: " ..
+        tostring(previousDecision.ID) ..
+        " -> " ..
+        tostring(currentDecision.ID)
+    )
+
+    -------------------------------------------------------
+    -- Old action is no longer valid.
+    -------------------------------------------------------
+
+    InterruptCurrentAction(
+        "decision_changed"
+    )
+
+    -------------------------------------------------------
+    -- Start new action.
+    -------------------------------------------------------
+
+    return
+        StartActionForDecision(
+            currentDecision
+        )
+
+end
+
+-----------------------------------------------------------
+-- CHECK ACTION STATE
+-----------------------------------------------------------
+
+local function UpdateCurrentAction()
+
+    RefreshCurrentAction()
+
+    if not currentAction then
+        return
+    end
+
+    -------------------------------------------------------
+    -- Finished action
+    -------------------------------------------------------
+
+    if IsActionFinished(
+        currentAction
+    ) then
+
+        RecordActionResult(
+            currentAction
+        )
+
+        Log(
+            "Controller detected finished action: " ..
+            tostring(
+                currentAction.type
+            ) ..
+            " state=" ..
+            tostring(
+                currentAction.state
+            )
+        )
+
+        currentAction = nil
+        currentActionId = nil
+
+        controllerState =
+            AIController.State.WAITING
+
+        return
+
+    end
+
+    -------------------------------------------------------
+    -- Still running
+    -------------------------------------------------------
+
+    controllerState =
+        AIController.State.EXECUTING
+
+end
+
+-----------------------------------------------------------
+-- MAIN UPDATE
+-----------------------------------------------------------
+
+function AIController.Update()
+
+    if not initialized then
+
+        AIController.Initialize()
+
+        if not initialized then
+            return false
+        end
+
+    end
+
+    -------------------------------------------------------
+    -- Update current action state first.
+    -------------------------------------------------------
+
+    UpdateCurrentAction()
+
+    -------------------------------------------------------
+    -- Read latest decision.
+    -------------------------------------------------------
+
+    controllerState =
+        AIController.State.THINKING
+
+    local decision =
+        ReadDecision()
+
+    if not decision then
+
+        Log(
+            "No decision available"
+        )
+
+        controllerState =
+            AIController.State.WAITING
+
+        return false
+
+    end
+
+    -------------------------------------------------------
+    -- Apply decision.
+    -------------------------------------------------------
+
+    local success =
+        ApplyDecision(
+            decision
+        )
+
+    if not success then
+
+        controllerState =
+            AIController.State.ERROR
+
+        return false
+
+    end
+
+    -------------------------------------------------------
+    -- If we have an action, execution continues.
+    -------------------------------------------------------
+
+    if currentAction then
+
+        controllerState =
+            AIController.State.EXECUTING
+
+    else
+
+        controllerState =
+            AIController.State.WAITING
+
+    end
+
+    return true
+
+end
+
+-----------------------------------------------------------
+-- FORCE RE-EVALUATION
+-----------------------------------------------------------
+
+function AIController.Reevaluate()
+
+    local decisionSystem =
+        GetDecisionSystem()
+
+    if not decisionSystem then
+        return false
+    end
+
+    if decisionSystem.Recalculate then
+
+        local result =
+            decisionSystem.Recalculate()
+
+        if not result then
+            return false
+        end
+
+        AIController.Update()
+
+        return true
+
+    end
+
+    return false
+
+end
+
+-----------------------------------------------------------
+-- GET CONTROLLER STATE
+-----------------------------------------------------------
+
+function AIController.GetState()
+
+    return controllerState
+
+end
+
+-----------------------------------------------------------
+-- GET CONTROLLER ID
+-----------------------------------------------------------
+
+function AIController.GetControllerId()
+
+    return controllerId
+
+end
+
+-----------------------------------------------------------
+-- GET CURRENT DECISION
+-----------------------------------------------------------
+
+function AIController.GetCurrentDecision()
+
+    return currentDecision
+
+end
+
+-----------------------------------------------------------
+-- GET PREVIOUS DECISION
+-----------------------------------------------------------
+
+function AIController.GetPreviousDecision()
+
+    return previousDecision
+
+end
+
+-----------------------------------------------------------
+-- GET CURRENT ACTION
+-----------------------------------------------------------
+
+function AIController.GetCurrentAction()
+
+    RefreshCurrentAction()
+
+    return currentAction
+
+end
+
+-----------------------------------------------------------
+-- GET CURRENT ACTION ID
+-----------------------------------------------------------
+
+function AIController.GetCurrentActionId()
+
+    return currentActionId
+
+end
+
+-----------------------------------------------------------
+-- GET LAST ACTION
+-----------------------------------------------------------
+
+function AIController.GetLastAction()
+
+    return lastAction
+
+end
+
+-----------------------------------------------------------
+-- GET LAST ACTION RESULT
+-----------------------------------------------------------
+
+function AIController.GetLastActionResult()
+
+    return lastActionResult
+
+end
+
+-----------------------------------------------------------
+-- GET ACTION HISTORY
+-----------------------------------------------------------
+
+function AIController.GetActionHistory()
+
+    return actionHistory
+
+end
+
+-----------------------------------------------------------
+-- GET STATISTICS
+-----------------------------------------------------------
+
+function AIController.GetStatistics()
+
+    return statistics
+
+end
+
+-----------------------------------------------------------
+-- GET STATUS
+-----------------------------------------------------------
+
+function AIController.GetStatus()
+
+    RefreshCurrentAction()
+
+    return {
+
+        Initialized =
+            initialized,
+
+        ControllerId =
+            controllerId,
+
+        State =
+            controllerState,
+
+        CurrentDecision =
+            currentDecision,
+
+        PreviousDecision =
+            previousDecision,
+
+        CurrentAction =
+            currentAction,
+
+        CurrentActionId =
+            currentActionId,
+
+        LastAction =
+            lastAction,
+
+        LastActionResult =
+            lastActionResult,
+
+        Statistics =
+            statistics
+
+    }
+
+end
+
+-----------------------------------------------------------
+-- STOP CURRENT ACTION
+-----------------------------------------------------------
+
+function AIController.StopCurrentAction(reason)
+
+    local stopped =
+        InterruptCurrentAction(
+            reason or
+                "controller_stop"
+        )
+
+    if stopped then
+
+        controllerState =
+            AIController.State.IDLE
+
+    end
+
+    return stopped
+
+end
+
+-----------------------------------------------------------
+-- RESET CONTROLLER
+-----------------------------------------------------------
+
+function AIController.Reset()
+
+    -------------------------------------------------------
+    -- Interrupt active action.
+    -------------------------------------------------------
+
+    if currentAction then
+
+        InterruptCurrentAction(
+            "controller_reset"
+        )
+
+    end
+
+    -------------------------------------------------------
+    -- Reset state.
+    -------------------------------------------------------
+
+    currentDecision = nil
+
+    previousDecision = nil
+
+    currentAction = nil
+
+    currentActionId = nil
+
+    lastAction = nil
+
+    lastActionResult = nil
+
+    actionHistory = {}
+
+    statistics = {
+
+        decisionsProcessed = 0,
+
+        actionsCreated = 0,
+
+        actionsStarted = 0,
+
+        actionsCompleted = 0,
+
+        actionsFailed = 0,
+
+        actionsInterrupted = 0
+
+    }
+
+    controllerState =
+        AIController.State.IDLE
+
+    Log(
+        "Controller reset"
+    )
+
+    return true
+
+end
+
+-----------------------------------------------------------
+-- INITIALIZE
+-----------------------------------------------------------
+
+function AIController.Initialize()
+
+    if initialized then
+        return true
+    end
+
+    attempts =
+        attempts + 1
+
+    Log(
+        "Initialize attempt #" ..
+        tostring(attempts)
+    )
+
+    -------------------------------------------------------
+    -- Check dependencies.
+    -------------------------------------------------------
+
+    local decisionSystem =
+        GetDecisionSystem()
+
+    if not decisionSystem then
+
+        Log(
+            "Waiting for DecisionSystem..."
+        )
+
+        return false
+
+    end
+
+    local actionSystem =
+        GetActionSystem()
+
+    if not actionSystem then
+
+        Log(
+            "Waiting for ActionSystem..."
+        )
+
+        return false
+
+    end
+
+    -------------------------------------------------------
+    -- Initialize ActionSystem.
+    -------------------------------------------------------
+
+    if actionSystem.Initialize then
+
+        local initializedActionSystem =
+            actionSystem.Initialize()
+
+        if not initializedActionSystem then
+
+            Log(
+                "ActionSystem initialization failed"
+            )
+
+            return false
+
+        end
+
+    end
+
+    -------------------------------------------------------
+    -- We do NOT force DecisionSystem initialization here.
+    --
+    -- DecisionSystem owns its own initialization and
+    -- WorldContext dependency.
+    -------------------------------------------------------
+
+    initialized = true
+
+    controllerState =
+        AIController.State.IDLE
+
+    Log(
+        "AI Controller initialized " ..
+        AIController.Version
+    )
+
+    return true
+
+end
+
+-----------------------------------------------------------
+-- GAME START
+-----------------------------------------------------------
+
+if Events and Events.OnGameStart then
+
+    Events.OnGameStart.Add(
+
+        function()
+
+            Log(
+                "OnGameStart"
+            )
+
+            AIController.Initialize()
+
+        end
+
+    )
+
+end
+
+-----------------------------------------------------------
+-- TICK
+-----------------------------------------------------------
+
+if Events and Events.OnTick then
+
+    Events.OnTick.Add(
+
+        function()
+
+            AIController.Update()
+
+        end
+
+    )
+
+end
+
+-----------------------------------------------------------
+-- EXPORT
+-----------------------------------------------------------
+
+BAO.AIController =
+    AIController
+
+-----------------------------------------------------------
+-- MODULE LOADED
+-----------------------------------------------------------
+
+Log(
+    "AI Controller " ..
+    AIController.Version ..
+    " module loaded"
+)
+
+===== ROUTINE DECISION BRIDGE =====
+-- ============================================================
+-- BanditsAIOverhaul
+-- BAO Routine / Decision Bridge V1.0
+-- ============================================================
+--
+-- Purpose:
+--   Connects Routine System with Decision System.
+--
+-- Architecture:
+--
+--   Routine
+--      в†“
+--   Routine Intent
+--      в†“
+--   Decision Context
+--      в†“
+--   Decision System
+--
+-- IMPORTANT:
+--   This module does NOT replace DecisionSystem.
+--   This module does NOT replace AIController.
+--   This module does NOT create Actions.
+--
+--   It only translates routine state into a decision context.
+--
+-- ============================================================
+
+local RoutineDecisionBridge = {}
+
+local MODULE_NAME = "BAO_RoutineDecisionBridge"
+local VERSION = "V1.0"
+
+local initialized = false
+local initializeAttempts = 0
+
+local bridgeState = {
+    ownerId = nil,
+
+    routineId = nil,
+
+    routineActivity = nil,
+
+    routineIntent = nil,
+
+    routinePriority = 0,
+
+    emergency = false,
+
+    emergencyReason = nil,
+
+    lastContext = nil,
+
+    lastDecision = nil,
+
+    lastUpdate = nil
+}
+
+-- ============================================================
+-- LOG
+-- ============================================================
+
+local function Log(message)
+    print(
+        "[BAO]["
+        .. MODULE_NAME
+        .. "] "
+        .. tostring(message)
+    )
+end
+
+-- ============================================================
+-- ROUTINE в†’ INTENT MAP
+-- ============================================================
+
+local ROUTINE_INTENTS = {
+
+    wake_up = {
+        intent = "rest",
+        priority = 20
+    },
+
+    sleep = {
+        intent = "rest",
+        priority = 30
+    },
+
+    rest = {
+        intent = "rest",
+        priority = 30
+    },
+
+    eat = {
+        intent = "gather_resources",
+        priority = 40
+    },
+
+    drink = {
+        intent = "gather_resources",
+        priority = 40
+    },
+
+    work = {
+        intent = "gather_resources",
+        priority = 30
+    },
+
+    gather = {
+        intent = "gather_resources",
+        priority = 40
+    },
+
+    farming = {
+        intent = "gather_resources",
+        priority = 30
+    },
+
+    cooking = {
+        intent = "gather_resources",
+        priority = 30
+    },
+
+    repair = {
+        intent = "gather_resources",
+        priority = 40
+    },
+
+    building = {
+        intent = "gather_resources",
+        priority = 30
+    },
+
+    guard = {
+        intent = "guard",
+        priority = 60
+    },
+
+    patrol = {
+        intent = "patrol",
+        priority = 60
+    },
+
+    socialize = {
+        intent = "help_ally",
+        priority = 20
+    },
+
+    talk = {
+        intent = "help_ally",
+        priority = 20
+    },
+
+    train = {
+        intent = "gather_resources",
+        priority = 30
+    },
+
+    idle = {
+        intent = "rest",
+        priority = 10
+    }
+}
+
+-- ============================================================
+-- DECISION PRIORITIES
+-- ============================================================
+
+local EMERGENCY_DECISIONS = {
+
+    combat = true,
+
+    retreat = true,
+
+    heal = true
+}
+
+local function IsEmergencyDecision(decision)
+    return EMERGENCY_DECISIONS[decision] == true
+end
+
+-- ============================================================
+-- MODULE ACCESS
+-- ============================================================
+
+local function GetRoutineSystem()
+
+    if BAO and BAO.RoutineSystem then
+        return BAO.RoutineSystem
+    end
+
+    return nil
+end
+
+local function GetDecisionSystem()
+
+    if BAO and BAO.DecisionSystem then
+        return BAO.DecisionSystem
+    end
+
+    return nil
+end
+
+-- ============================================================
+-- ROUTINE INTENT
+-- ============================================================
+
+function RoutineDecisionBridge.GetRoutineIntent(
+    activityType
+)
+    if type(activityType) ~= "string" then
+        return nil
+    end
+
+    return ROUTINE_INTENTS[activityType]
+end
+
+-- ============================================================
+-- BUILD ROUTINE CONTEXT
+-- ============================================================
+
+function RoutineDecisionBridge.BuildRoutineContext(
+    routineId,
+    hour,
+    minute,
+    worldContext
+)
+    local routineSystem =
+        GetRoutineSystem()
+
+    if not routineSystem then
+        Log(
+            "BuildRoutineContext failed: "
+            .. "RoutineSystem unavailable"
+        )
+
+        return nil
+    end
+
+    local routine =
+        routineSystem.GetRoutine(
+            routineId
+        )
+
+    if not routine then
+        Log(
+            "BuildRoutineContext failed: "
+            .. "routine not found: "
+            .. tostring(routineId)
+        )
+
+        return nil
+    end
+
+    local activity =
+        routineSystem.FindCurrentActivity(
+            routineId,
+            hour,
+            minute,
+            worldContext
+        )
+
+    local context = {
+        routineId = routineId,
+
+        ownerId = routine.ownerId,
+
+        routineEnabled = routine.enabled == true,
+
+        activityId = nil,
+
+        activityType = nil,
+
+        routineIntent = nil,
+
+        routinePriority = 0,
+
+        hour = hour,
+
+        minute = minute
+    }
+
+    if activity then
+
+        context.activityId =
+            activity.id
+
+        context.activityType =
+            activity.type
+
+        local intent =
+            RoutineDecisionBridge.GetRoutineIntent(
+                activity.type
+            )
+
+        if intent then
+
+            context.routineIntent =
+                intent.intent
+
+            context.routinePriority =
+                intent.priority
+        end
+    end
+
+    return context
+end
+
+-- ============================================================
+-- BUILD DECISION OVERRIDE CONTEXT
+-- ============================================================
+
+function RoutineDecisionBridge.BuildDecisionContext(
+    routineContext,
+    worldContext
+)
+    local context = {}
+
+    if type(worldContext) == "table" then
+
+        for key, value in pairs(worldContext) do
+            context[key] = value
+        end
+    end
+
+    if type(routineContext) == "table" then
+
+        context.routineId =
+            routineContext.routineId
+
+        context.routineActivityId =
+            routineContext.activityId
+
+        context.routineActivityType =
+            routineContext.activityType
+
+        context.routineIntent =
+            routineContext.routineIntent
+
+        context.routinePriority =
+            routineContext.routinePriority
+
+        context.routineEnabled =
+            routineContext.routineEnabled
+    end
+
+    return context
+end
+
+-- ============================================================
+-- EMERGENCY DETECTION
+-- ============================================================
+
+function RoutineDecisionBridge.EvaluateEmergency(
+    worldContext
+)
+    if type(worldContext) ~= "table" then
+        return false, nil
+    end
+
+    -- Combat state.
+
+    if worldContext.inCombat == true then
+        return true, "in_combat"
+    end
+
+    if worldContext.enemyDetected == true then
+        return true, "enemy_detected"
+    end
+
+    -- Health emergency.
+
+    if type(worldContext.health) == "number" then
+
+        if worldContext.health <= 25 then
+            return true, "critical_health"
+        end
+    end
+
+    -- Zombie danger.
+
+    if type(worldContext.zombiesNearby) == "number" then
+
+        if worldContext.zombiesNearby >= 20 then
+            return true, "high_zombie_density"
+        end
+    end
+
+    -- Panic.
+
+    if type(worldContext.panic) == "number" then
+
+        if worldContext.panic >= 80 then
+            return true, "high_panic"
+        end
+    end
+
+    return false, nil
+end
+
+-- ============================================================
+-- APPLY ROUTINE TO DECISION CONTEXT
+-- ============================================================
+
+function RoutineDecisionBridge.ApplyRoutineContext(
+    worldContext,
+    routineContext
+)
+    local context =
+        RoutineDecisionBridge.BuildDecisionContext(
+            routineContext,
+            worldContext
+        )
+
+    local emergency, reason =
+        RoutineDecisionBridge.EvaluateEmergency(
+            worldContext
+        )
+
+    context.emergency = emergency
+
+    context.emergencyReason = reason
+
+    bridgeState.emergency =
+        emergency
+
+    bridgeState.emergencyReason =
+        reason
+
+    return context
+end
+
+-- ============================================================
+-- GET ROUTINE PREFERENCE
+-- ============================================================
+
+function RoutineDecisionBridge.GetRoutinePreference(
+    routineContext
+)
+    if type(routineContext) ~= "table" then
+        return nil
+    end
+
+    if routineContext.routineIntent == nil then
+        return nil
+    end
+
+    return {
+        decision =
+            routineContext.routineIntent,
+
+        priority =
+            routineContext.routinePriority or 0,
+
+        activity =
+            routineContext.activityType
+    }
+end
+
+-- ============================================================
+-- DECISION OVERRIDE EVALUATION
+-- ============================================================
+
+function RoutineDecisionBridge.EvaluateDecision(
+    decision,
+    routineContext,
+    worldContext
+)
+    local result = {
+
+        decision = decision,
+
+        routineActivity =
+            routineContext
+            and routineContext.activityType
+            or nil,
+
+        routineIntent =
+            routineContext
+            and routineContext.routineIntent
+            or nil,
+
+        routinePriority =
+            routineContext
+            and routineContext.routinePriority
+            or 0,
+
+        emergency = false,
+
+        emergencyReason = nil,
+
+        routineOverridden = false
+    }
+
+    local emergency, reason =
+        RoutineDecisionBridge.EvaluateEmergency(
+            worldContext
+        )
+
+    result.emergency = emergency
+
+    result.emergencyReason = reason
+
+    if emergency then
+
+        result.routineOverridden = true
+
+        return result
+    end
+
+    -- If DecisionSystem already produced a valid decision,
+    -- it remains authoritative.
+    --
+    -- Routine is contextual information, not a forced command.
+
+    return result
+end
+
+-- ============================================================
+-- PROCESS CURRENT STATE
+-- ============================================================
+
+function RoutineDecisionBridge.Update(
+    ownerId,
+    routineId,
+    hour,
+    minute,
+    worldContext
+)
+    local routineSystem =
+        GetRoutineSystem()
+
+    if not routineSystem then
+        return nil
+    end
+
+    local routineContext =
+        RoutineDecisionBridge.BuildRoutineContext(
+            routineId,
+            hour,
+            minute,
+            worldContext
+        )
+
+    if not routineContext then
+        return nil
+    end
+
+    local decisionContext =
+        RoutineDecisionBridge.ApplyRoutineContext(
+            worldContext,
+            routineContext
+        )
+
+    bridgeState.ownerId =
+        ownerId
+
+    bridgeState.routineId =
+        routineId
+
+    bridgeState.routineActivity =
+        routineContext.activityType
+
+    bridgeState.routineIntent =
+        routineContext.routineIntent
+
+    bridgeState.routinePriority =
+        routineContext.routinePriority
+
+    bridgeState.lastContext =
+        decisionContext
+
+    bridgeState.lastUpdate = {
+        hour = hour,
+        minute = minute
+    }
+
+    return decisionContext
+end
+
+-- ============================================================
+-- REGISTER DECISION
+-- ============================================================
+
+function RoutineDecisionBridge.RegisterDecision(
+    decision
+)
+    bridgeState.lastDecision =
+        decision
+
+    return RoutineDecisionBridge.EvaluateDecision(
+        decision,
+        {
+            activityType =
+                bridgeState.routineActivity,
+
+            routineIntent =
+                bridgeState.routineIntent,
+
+            routinePriority =
+                bridgeState.routinePriority
+        },
+        bridgeState.lastContext
+    )
+end
+
+-- ============================================================
+-- STATE ACCESS
+-- ============================================================
+
+function RoutineDecisionBridge.GetState()
+    return bridgeState
+end
+
+function RoutineDecisionBridge.GetLastContext()
+    return bridgeState.lastContext
+end
+
+function RoutineDecisionBridge.GetLastDecision()
+    return bridgeState.lastDecision
+end
+
+function RoutineDecisionBridge.IsEmergency()
+    return bridgeState.emergency == true
+end
+
+function RoutineDecisionBridge.GetEmergencyReason()
+    return bridgeState.emergencyReason
+end
+
+-- ============================================================
+-- INITIALIZATION
+-- ============================================================
+
+function RoutineDecisionBridge.Initialize()
+
+    initializeAttempts =
+        initializeAttempts + 1
+
+    Log(
+        "Initialize attempt #"
+        .. tostring(initializeAttempts)
+    )
+
+    if initialized then
+
+        Log(
+            "Routine/Decision Bridge already initialized"
+        )
+
+        return true
+    end
+
+    if not GetRoutineSystem() then
+
+        Log(
+            "RoutineSystem unavailable"
+        )
+
+        return false
+    end
+
+    if not GetDecisionSystem() then
+
+        Log(
+            "DecisionSystem unavailable"
+        )
+
+        return false
+    end
+
+    initialized = true
+
+    Log(
+        "Routine/Decision Bridge initialized "
+        .. VERSION
+    )
+
+    return true
+end
+
+-- ============================================================
+-- STATUS
+-- ============================================================
+
+function RoutineDecisionBridge.GetStatus()
+
+    return {
+
+        initialized = initialized,
+
+        version = VERSION,
+
+        initializeAttempts =
+            initializeAttempts,
+
+        ownerId =
+            bridgeState.ownerId,
+
+        routineId =
+            bridgeState.routineId,
+
+        routineActivity =
+            bridgeState.routineActivity,
+
+        routineIntent =
+            bridgeState.routineIntent,
+
+        routinePriority =
+            bridgeState.routinePriority,
+
+        emergency =
+            bridgeState.emergency,
+
+        emergencyReason =
+            bridgeState.emergencyReason,
+
+        lastDecision =
+            bridgeState.lastDecision
+    }
+end
+
+-- ============================================================
+-- EVENT
+-- ============================================================
+
+if Events then
+
+    Events.OnGameStart.Add(function()
+
+        Log("OnGameStart")
+
+        if not initialized then
+
+            local success =
+                RoutineDecisionBridge.Initialize()
+
+            if not success then
+
+                Log(
+                    "Initialization deferred: "
+                    .. "dependencies not ready"
+                )
+            end
+        end
+
+    end)
+
+end
+
+-- ============================================================
+-- EXPORT
+-- ============================================================
+
+BAO = BAO or {}
+
+BAO.RoutineDecisionBridge =
+    RoutineDecisionBridge
+
+Log(
+    "Routine / Decision Bridge "
+    .. VERSION
+    .. " module loaded"
+)
+
+return RoutineDecisionBridge
+
+
+===== ACTION TEST =====
+-----------------------------------------------------------
+-- BAO_ActionTestHarness.lua
+-- BanditsAIOverhaul
+--
+-- Action Test Harness V1.0
+--
+-- Tests the universal Action System without requiring
+-- physical NPC movement.
+-----------------------------------------------------------
+
+if not BAO then
+    BAO = {}
+end
+
+local ActionTestHarness = {}
+
+-----------------------------------------------------------
+-- VERSION
+-----------------------------------------------------------
+
+ActionTestHarness.Version = "V1.0"
+
+-----------------------------------------------------------
+-- TEST STATE
+-----------------------------------------------------------
+
+ActionTestHarness.total = 0
+ActionTestHarness.passed = 0
+ActionTestHarness.failed = 0
+
+-----------------------------------------------------------
+-- LOGGING
+-----------------------------------------------------------
+
+local function Log(message)
+    print(
+        "[BAO ActionTestHarness V1.0] " ..
+        tostring(message)
+    )
+end
+
+-----------------------------------------------------------
+-- TEST RESULT
+-----------------------------------------------------------
+
+local function TestResult(name, passed, details)
+
+    ActionTestHarness.total =
+        ActionTestHarness.total + 1
+
+    if passed then
+
+        ActionTestHarness.passed =
+            ActionTestHarness.passed + 1
+
+        Log(
+            "PASS: " ..
+            tostring(name) ..
+            (
+                details
+                and (" - " .. tostring(details))
+                or ""
+            )
+        )
+
+    else
+
+        ActionTestHarness.failed =
+            ActionTestHarness.failed + 1
+
+        Log(
+            "FAIL: " ..
+            tostring(name) ..
+            (
+                details
+                and (" - " .. tostring(details))
+                or ""
+            )
+        )
+    end
+end
+
+-----------------------------------------------------------
+-- RESET TEST COUNTERS
+-----------------------------------------------------------
+
+function ActionTestHarness.Reset()
+
+    ActionTestHarness.total = 0
+    ActionTestHarness.passed = 0
+    ActionTestHarness.failed = 0
+
+end
+
+-----------------------------------------------------------
+-- DEPENDENCY TEST
+-----------------------------------------------------------
+
+function ActionTestHarness.TestDependency()
+
+    local actionSystem = BAO.ActionSystem
+
+    if actionSystem then
+
+        TestResult(
+            "ActionSystem dependency",
+            true,
+            "found"
+        )
+
+        return true
+    end
+
+    TestResult(
+        "ActionSystem dependency",
+        false,
+        "BAO.ActionSystem not found"
+    )
+
+    return false
+end
+
+-----------------------------------------------------------
+-- TEST CREATE ACTION
+-----------------------------------------------------------
+
+function ActionTestHarness.TestCreateAction()
+
+    local AS = BAO.ActionSystem
+
+    local action =
+        AS.CreateAction(
+            "test_action",
+            {
+                priority = 50,
+                duration = 10,
+                interruptible = true
+            }
+        )
+
+    local passed =
+        action ~= nil
+        and action.id ~= nil
+        and action.type == "test_action"
+        and action.state == AS.State.PENDING
+        and action.priority == 50
+        and action.duration == 10
+        and action.interruptible == true
+
+    TestResult(
+        "Create Action",
+        passed,
+        passed
+        and "action created correctly"
+        or "invalid action object"
+    )
+
+    return action
+end
+
+-----------------------------------------------------------
+-- TEST REGISTER
+-----------------------------------------------------------
+
+function ActionTestHarness.TestRegister(action)
+
+    local AS = BAO.ActionSystem
+
+    local result =
+        AS.RegisterAction(action)
+
+    local stored =
+        AS.GetAction(action.id)
+
+    local passed =
+        result == true
+        and stored == action
+
+    TestResult(
+        "Register Action",
+        passed,
+        passed
+        and "action registered"
+        or "action not registered"
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST START
+-----------------------------------------------------------
+
+function ActionTestHarness.TestStart(action)
+
+    local AS = BAO.ActionSystem
+
+    local result =
+        AS.StartAction(action.id)
+
+    local passed =
+        result == true
+        and action.state == AS.State.RUNNING
+
+    TestResult(
+        "Start Action",
+        passed,
+        passed
+        and "state=running"
+        or ("state=" .. tostring(action.state))
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST UPDATE
+-----------------------------------------------------------
+
+function ActionTestHarness.TestUpdate(action)
+
+    local AS = BAO.ActionSystem
+
+    AS.UpdateAction(
+        action.id,
+        2
+    )
+
+    local passed =
+        action.state == AS.State.RUNNING
+        and action.elapsed == 2
+
+    TestResult(
+        "Update Action",
+        passed,
+        passed
+        and "elapsed=2"
+        or ("elapsed=" .. tostring(action.elapsed))
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST COMPLETE
+-----------------------------------------------------------
+
+function ActionTestHarness.TestComplete(action)
+
+    local AS = BAO.ActionSystem
+
+    local result =
+        AS.CompleteAction(
+            action.id,
+            AS.Result.SUCCESS,
+            {
+                test = true
+            }
+        )
+
+    local passed =
+        result == true
+        and action.state == AS.State.COMPLETED
+        and action.result == AS.Result.SUCCESS
+        and action.resultData ~= nil
+
+    TestResult(
+        "Complete Action",
+        passed,
+        passed
+        and "state=completed"
+        or "completion failed"
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST FAILED ACTION
+-----------------------------------------------------------
+
+function ActionTestHarness.TestFail()
+
+    local AS = BAO.ActionSystem
+
+    local action =
+        AS.CreateAction(
+            "test_fail",
+            {
+                duration = 10
+            }
+        )
+
+    AS.RegisterAction(action)
+
+    AS.StartAction(action.id)
+
+    local result =
+        AS.FailAction(
+            action.id,
+            AS.Result.FAILED,
+            "test_failure"
+        )
+
+    local passed =
+        result == true
+        and action.state == AS.State.FAILED
+        and action.result == AS.Result.FAILED
+        and action.reason == "test_failure"
+
+    TestResult(
+        "Fail Action",
+        passed,
+        passed
+        and "failure recorded"
+        or "failure handling failed"
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST INTERRUPT
+-----------------------------------------------------------
+
+function ActionTestHarness.TestInterrupt()
+
+    local AS = BAO.ActionSystem
+
+    local action =
+        AS.CreateAction(
+            "test_interrupt",
+            {
+                duration = 100,
+                interruptible = true
+            }
+        )
+
+    AS.RegisterAction(action)
+
+    AS.StartAction(action.id)
+
+    local result =
+        AS.InterruptAction(
+            action.id,
+            "test_interrupt"
+        )
+
+    local passed =
+        result == true
+        and action.state == AS.State.INTERRUPTED
+        and action.result == AS.Result.INTERRUPTED
+        and action.reason == "test_interrupt"
+
+    TestResult(
+        "Interrupt Action",
+        passed,
+        passed
+        and "interruption recorded"
+        or "interruption failed"
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST CANCEL
+-----------------------------------------------------------
+
+function ActionTestHarness.TestCancel()
+
+    local AS = BAO.ActionSystem
+
+    local action =
+        AS.CreateAction(
+            "test_cancel",
+            {
+                duration = 100
+            }
+        )
+
+    AS.RegisterAction(action)
+
+    local result =
+        AS.CancelAction(
+            action.id,
+            "test_cancel"
+        )
+
+    local passed =
+        result == true
+        and action.state == AS.State.CANCELLED
+        and action.result == AS.Result.CANCELLED
+        and action.reason == "test_cancel"
+
+    TestResult(
+        "Cancel Action",
+        passed,
+        passed
+        and "cancellation recorded"
+        or "cancellation failed"
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST BLOCKED REQUIREMENT
+-----------------------------------------------------------
+
+function ActionTestHarness.TestBlockedRequirement()
+
+    local AS = BAO.ActionSystem
+
+    local action =
+        AS.CreateAction(
+            "test_blocked",
+            {
+                requirements = {
+                    hasTool = false
+                }
+            }
+        )
+
+    AS.RegisterAction(action)
+
+    local result =
+        AS.StartAction(action.id)
+
+    local passed =
+        result == false
+        and action.state == AS.State.FAILED
+        and action.result == AS.Result.BLOCKED
+
+    TestResult(
+        "Blocked Requirement",
+        passed,
+        passed
+        and "action correctly blocked"
+        or "requirement blocking failed"
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST CALLBACKS
+-----------------------------------------------------------
+
+function ActionTestHarness.TestCallbacks()
+
+    local AS = BAO.ActionSystem
+
+    local callbackState = {
+        started = false,
+        completed = false
+    }
+
+    local action =
+        AS.CreateAction(
+            "test_callbacks",
+            {
+                duration = 1,
+
+                onStart = function()
+                    callbackState.started = true
+                end,
+
+                onComplete = function()
+                    callbackState.completed = true
+                end
+            }
+        )
+
+    AS.RegisterAction(action)
+
+    AS.StartAction(action.id)
+
+    AS.UpdateAction(
+        action.id,
+        1
+    )
+
+    local passed =
+        callbackState.started == true
+        and callbackState.completed == true
+
+    TestResult(
+        "Action Callbacks",
+        passed,
+        passed
+        and "start/complete callbacks executed"
+        or "callback execution failed"
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- TEST FULL LIFECYCLE
+-----------------------------------------------------------
+
+function ActionTestHarness.TestFullLifecycle()
+
+    local AS = BAO.ActionSystem
+
+    local action =
+        AS.CreateAction(
+            "test_lifecycle",
+            {
+                priority = 100,
+                duration = 5,
+                interruptible = true
+            }
+        )
+
+    AS.RegisterAction(action)
+
+    local startResult =
+        AS.StartAction(action.id)
+
+    local updateResult =
+        AS.UpdateAction(
+            action.id,
+            2
+        )
+
+    local completeResult =
+        AS.CompleteAction(
+            action.id,
+            AS.Result.SUCCESS
+        )
+
+    local passed =
+        startResult == true
+        and updateResult == true
+        and completeResult == true
+        and action.state == AS.State.COMPLETED
+        and action.result == AS.Result.SUCCESS
+
+    TestResult(
+        "Full Action Lifecycle",
+        passed,
+        passed
+        and "create -> register -> start -> update -> complete"
+        or "lifecycle failed"
+    )
+
+    return passed
+end
+
+-----------------------------------------------------------
+-- RUN ALL TESTS
+-----------------------------------------------------------
+
+function ActionTestHarness.Run()
+
+    ActionTestHarness.Reset()
+
+    Log("========================================")
+    Log("ACTION SYSTEM TEST HARNESS V1.0")
+    Log("========================================")
+
+    -------------------------------------------------------
+    -- Dependency
+    -------------------------------------------------------
+
+    if not ActionTestHarness.TestDependency() then
+
+        Log("STATUS: FAILED - dependency missing")
+
+        return false
+    end
+
+    local AS = BAO.ActionSystem
+
+    -------------------------------------------------------
+    -- Clean state
+    -------------------------------------------------------
+
+    AS.Clear()
+
+    -------------------------------------------------------
+    -- Test 1
+    -------------------------------------------------------
+
+    local action =
+        ActionTestHarness.TestCreateAction()
+
+    -------------------------------------------------------
+    -- Test 2
+    -------------------------------------------------------
+
+    if action then
+        ActionTestHarness.TestRegister(action)
+    else
+        TestResult(
+            "Register Action",
+            false,
+            "action creation failed"
+        )
+    end
+
+    -------------------------------------------------------
+    -- Test 3
+    -------------------------------------------------------
+
+    if action then
+        ActionTestHarness.TestStart(action)
+    else
+        TestResult(
+            "Start Action",
+            false,
+            "action creation failed"
+        )
+    end
+
+    -------------------------------------------------------
+    -- Test 4
+    -------------------------------------------------------
+
+    if action then
+        ActionTestHarness.TestUpdate(action)
+    else
+        TestResult(
+            "Update Action",
+            false,
+            "action creation failed"
+        )
+    end
+
+    -------------------------------------------------------
+    -- Test 5
+    -------------------------------------------------------
+
+    if action then
+        ActionTestHarness.TestComplete(action)
+    else
+        TestResult(
+            "Complete Action",
+            false,
+            "action creation failed"
+        )
+    end
+
+    -------------------------------------------------------
+    -- Additional tests
+    -------------------------------------------------------
+
+    ActionTestHarness.TestFail()
+
+    ActionTestHarness.TestInterrupt()
+
+    ActionTestHarness.TestCancel()
+
+    ActionTestHarness.TestBlockedRequirement()
+
+    ActionTestHarness.TestCallbacks()
+
+    ActionTestHarness.TestFullLifecycle()
+
+    -------------------------------------------------------
+    -- Summary
+    -------------------------------------------------------
+
+    Log("========================================")
+    Log(
+        "TOTAL: " ..
+        tostring(ActionTestHarness.total)
+    )
+
+    Log(
+        "PASS: " ..
+        tostring(ActionTestHarness.passed)
+    )
+
+    Log(
+        "FAIL: " ..
+        tostring(ActionTestHarness.failed)
+    )
+
+    if ActionTestHarness.failed == 0 then
+
+        Log("STATUS: ALL TESTS PASSED")
+
+    else
+
+        Log("STATUS: TESTS FAILED")
+
+    end
+
+    Log("========================================")
+
+    return ActionTestHarness.failed == 0
+end
+
+-----------------------------------------------------------
+-- EXPORT
+-----------------------------------------------------------
+
+BAO.ActionTestHarness = ActionTestHarness
+
+-----------------------------------------------------------
+-- AUTOMATIC TEST
+-----------------------------------------------------------
+
+if Events and Events.OnGameStart then
+
+    Events.OnGameStart.Add(function()
+
+        Log("OnGameStart detected")
+
+        if BAO.ActionSystem then
+
+            Log("ActionSystem dependency available")
+
+            ActionTestHarness.Run()
+
+        else
+
+            Log(
+                "ERROR: ActionSystem dependency missing"
+            )
+
+        end
+
+    end)
+
+else
+
+    Log(
+        "WARNING: Events.OnGameStart not available"
+    )
+
+end
+
+-----------------------------------------------------------
+-- LOAD MESSAGE
+-----------------------------------------------------------
+
+Log(
+    "BAO_ActionTestHarness.lua loaded - " ..
+    ActionTestHarness.Version
+)
+
+===== ACTION EXECUTOR TEST =====
+-- ============================================================
+-- BanditsAIOverhaul
+-- BAO_ActionExecutorTestHarness.lua
+--
+-- Action Executor V1.0 Test Harness
+-- ============================================================
+
+local TestHarness = {}
+
+TestHarness.VERSION = "1.0"
+
+TestHarness.total = 0
+TestHarness.pass = 0
+TestHarness.fail = 0
+
+-- ============================================================
+-- LOG
+-- ============================================================
+
+local function Log(message)
+
+    print(
+        "[BAO][BAO_ActionExecutorTestHarness] "
+        .. tostring(message)
+    )
+
+end
+
+-- ============================================================
+-- TEST
+-- ============================================================
+
+local function Test(name, condition)
+
+    TestHarness.total =
+        TestHarness.total + 1
+
+    if condition then
+
+        TestHarness.pass =
+            TestHarness.pass + 1
+
+        Log(
+            "PASS: "
+            .. tostring(name)
+        )
+
+        return true
+
+    end
+
+    TestHarness.fail =
+        TestHarness.fail + 1
+
+    Log(
+        "FAIL: "
+        .. tostring(name)
+    )
+
+    return false
+
+end
+
+-- ============================================================
+-- DEPENDENCIES
+-- ============================================================
+
+local function TestDependencies()
+
+    Log("=== TEST 1: DEPENDENCIES ===")
+
+    Test(
+        "BAO exists",
+        BAO ~= nil
+    )
+
+    Test(
+        "ActionSystem exists",
+        BAO ~= nil
+        and BAO.ActionSystem ~= nil
+    )
+
+    Test(
+        "ActionExecutor exists",
+        BAO ~= nil
+        and BAO.ActionExecutor ~= nil
+    )
+
+end
+
+-- ============================================================
+-- INITIALIZATION
+-- ============================================================
+
+local function TestInitialization()
+
+    Log("=== TEST 2: INITIALIZATION ===")
+
+    if not BAO
+        or not BAO.ActionExecutor then
+
+        Test(
+            "ActionExecutor initialized",
+            false
+        )
+
+        Test(
+            "Version is 1.0",
+            false
+        )
+
+        return
+
+    end
+
+    local executor =
+        BAO.ActionExecutor
+
+    Test(
+        "ActionExecutor initialized",
+        executor.initialized == true
+    )
+
+    Test(
+        "Version is 1.0",
+        executor.VERSION == "1.0"
+    )
+
+end
+
+-- ============================================================
+-- EXECUTOR TYPES
+-- ============================================================
+
+local function TestExecutorTypes()
+
+    Log("=== TEST 3: EXECUTOR TYPES ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    Test(
+        "patrol mapping",
+        executor.GetExecutorType("patrol")
+            == executor.TYPES.PATROL
+    )
+
+    Test(
+        "explore mapping",
+        executor.GetExecutorType("explore")
+            == executor.TYPES.EXPLORE
+    )
+
+    Test(
+        "gather_resources mapping",
+        executor.GetExecutorType(
+            "gather_resources"
+        )
+        == executor.TYPES.GATHER_RESOURCES
+    )
+
+    Test(
+        "guard mapping",
+        executor.GetExecutorType("guard")
+            == executor.TYPES.GUARD
+    )
+
+    Test(
+        "help_ally mapping",
+        executor.GetExecutorType("help_ally")
+            == executor.TYPES.HELP_ALLY
+    )
+
+    Test(
+        "rest mapping",
+        executor.GetExecutorType("rest")
+            == executor.TYPES.REST
+    )
+
+    Test(
+        "heal mapping",
+        executor.GetExecutorType("heal")
+            == executor.TYPES.HEAL
+    )
+
+    Test(
+        "retreat mapping",
+        executor.GetExecutorType("retreat")
+            == executor.TYPES.RETREAT
+    )
+
+    Test(
+        "combat mapping",
+        executor.GetExecutorType("combat")
+            == executor.TYPES.COMBAT
+    )
+
+    Test(
+        "unknown mapping",
+        executor.GetExecutorType(
+            "unknown_action"
+        )
+        == executor.TYPES.GENERIC
+    )
+
+end
+
+-- ============================================================
+-- PLAN CREATION
+-- ============================================================
+
+local function TestPlanCreation()
+
+    Log("=== TEST 4: PLAN CREATION ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local action = {
+        type = "patrol"
+    }
+
+    local plan =
+        executor.CreatePlan(
+            action,
+            {
+                source = "test_harness"
+            }
+        )
+
+    Test(
+        "plan created",
+        type(plan) == "table"
+    )
+
+    if type(plan) ~= "table" then
+        return
+    end
+
+    Test(
+        "correct executor type",
+        plan.executorType
+            == executor.TYPES.PATROL
+    )
+
+    Test(
+        "action type stored",
+        plan.actionType == "patrol"
+    )
+
+    Test(
+        "steps table exists",
+        type(plan.steps) == "table"
+    )
+
+    Test(
+        "initial step is prepare",
+        plan.currentStep == "prepare"
+    )
+
+    Test(
+        "navigation required",
+        plan.navigationRequired == true
+    )
+
+    Test(
+        "animation required",
+        plan.animationRequired == true
+    )
+
+    Test(
+        "plan is interruptible",
+        plan.interruptible == true
+    )
+
+end
+
+-- ============================================================
+-- GATHER RESOURCE PLAN
+-- ============================================================
+
+local function TestGatherPlan()
+
+    Log("=== TEST 5: GATHER PLAN ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local action = {
+        type = "gather_resources"
+    }
+
+    local plan =
+        executor.CreatePlan(
+            action
+        )
+
+    Test(
+        "gather plan created",
+        type(plan) == "table"
+    )
+
+    if type(plan) ~= "table" then
+        return
+    end
+
+    Test(
+        "gather executor type",
+        plan.executorType
+            == executor.TYPES.GATHER_RESOURCES
+    )
+
+    Test(
+        "gather navigation required",
+        plan.navigationRequired == true
+    )
+
+    Test(
+        "gather animation required",
+        plan.animationRequired == true
+    )
+
+    Test(
+        "gather interaction required",
+        plan.interactionRequired == true
+    )
+
+end
+
+-- ============================================================
+-- COMBAT PLAN
+-- ============================================================
+
+local function TestCombatPlan()
+
+    Log("=== TEST 6: COMBAT PLAN ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local action = {
+        type = "combat"
+    }
+
+    local plan =
+        executor.CreatePlan(
+            action
+        )
+
+    Test(
+        "combat plan created",
+        type(plan) == "table"
+    )
+
+    if type(plan) ~= "table" then
+        return
+    end
+
+    Test(
+        "combat executor type",
+        plan.executorType
+            == executor.TYPES.COMBAT
+    )
+
+    Test(
+        "combat navigation required",
+        plan.navigationRequired == true
+    )
+
+    Test(
+        "combat animation required",
+        plan.animationRequired == true
+    )
+
+    Test(
+        "combat required",
+        plan.combatRequired == true
+    )
+
+end
+
+-- ============================================================
+-- EXECUTION CREATION
+-- ============================================================
+
+local function TestExecutionCreation()
+
+    Log("=== TEST 7: EXECUTION CREATION ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return nil
+    end
+
+    local action = {
+        type = "gather_resources"
+    }
+
+    local execution =
+        executor.CreateExecution(
+            "test_action_001",
+            action,
+            {
+                source = "test_harness"
+            }
+        )
+
+    Test(
+        "execution created",
+        type(execution) == "table"
+    )
+
+    if type(execution) ~= "table" then
+        return nil
+    end
+
+    Test(
+        "execution has id",
+        execution.id ~= nil
+    )
+
+    Test(
+        "action id linked",
+        execution.actionId
+            == "test_action_001"
+    )
+
+    Test(
+        "action type linked",
+        execution.actionType
+            == "gather_resources"
+    )
+
+    Test(
+        "executor type linked",
+        execution.executorType
+            == executor.TYPES.GATHER_RESOURCES
+    )
+
+    Test(
+        "initial state is IDLE",
+        execution.state
+            == executor.STATES.IDLE
+    )
+
+    Test(
+        "result is nil",
+        execution.result == nil
+    )
+
+    Test(
+        "execution plan exists",
+        type(execution.plan) == "table"
+    )
+
+    Test(
+        "metadata exists",
+        type(execution.metadata) == "table"
+    )
+
+    return execution
+
+end
+
+-- ============================================================
+-- VALIDATION
+-- ============================================================
+
+local function TestValidation(execution)
+
+    Log("=== TEST 8: VALIDATION ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor
+        or not execution then
+
+        return
+    end
+
+    local valid, reason =
+        executor.ValidateExecution(
+            execution
+        )
+
+    Test(
+        "valid execution",
+        valid == true
+    )
+
+    Test(
+        "validation reason is nil",
+        reason == nil
+    )
+
+end
+
+-- ============================================================
+-- START
+-- ============================================================
+
+local function TestStart(execution)
+
+    Log("=== TEST 9: START ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor
+        or not execution then
+
+        return
+    end
+
+    local started, reason =
+        executor.StartExecution(
+            execution
+        )
+
+    Test(
+        "execution started",
+        started == true
+    )
+
+    Test(
+        "start reason is nil",
+        reason == nil
+    )
+
+    Test(
+        "state is PREPARING",
+        execution.state
+            == executor.STATES.PREPARING
+    )
+
+    Test(
+        "current execution linked",
+        executor.GetCurrentExecution()
+            == execution
+    )
+
+    Test(
+        "startedAt exists",
+        execution.startedAt ~= nil
+    )
+
+    Test(
+        "attempts increased",
+        execution.attempts >= 1
+    )
+
+end
+
+-- ============================================================
+-- PREPARE / UPDATE
+-- ============================================================
+
+local function TestUpdate(execution)
+
+    Log("=== TEST 10: UPDATE ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor
+        or not execution then
+
+        return
+    end
+
+    executor.Update()
+
+    Test(
+        "state moved to EXECUTING",
+        execution.state
+            == executor.STATES.EXECUTING
+    )
+
+    Test(
+        "plan moved to execute",
+        execution.plan.currentStep
+            == "execute"
+    )
+
+end
+
+-- ============================================================
+-- COMPLETE
+-- ============================================================
+
+local function TestCompletion(execution)
+
+    Log("=== TEST 11: COMPLETION ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor
+        or not execution then
+
+        return
+    end
+
+    local completed =
+        executor.CompleteExecution(
+            execution,
+            "test_completed"
+        )
+
+    Test(
+        "completion returned true",
+        completed == true
+    )
+
+    Test(
+        "state is COMPLETED",
+        execution.state
+            == executor.STATES.COMPLETED
+    )
+
+    Test(
+        "result is SUCCESS",
+        execution.result
+            == executor.RESULTS.SUCCESS
+    )
+
+    Test(
+        "reason stored",
+        execution.reason
+            == "test_completed"
+    )
+
+    Test(
+        "finishedAt exists",
+        execution.finishedAt ~= nil
+    )
+
+    Test(
+        "current execution cleared",
+        executor.GetCurrentExecution()
+            == nil
+    )
+
+    Test(
+        "last execution stored",
+        executor.GetLastExecution()
+            == execution
+    )
+
+end
+
+-- ============================================================
+-- INTERRUPT
+-- ============================================================
+
+local function TestInterrupt()
+
+    Log("=== TEST 12: INTERRUPTION ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local action = {
+        type = "guard"
+    }
+
+    local execution =
+        executor.CreateExecution(
+            "test_action_002",
+            action
+        )
+
+    Test(
+        "interrupt execution created",
+        type(execution) == "table"
+    )
+
+    if type(execution) ~= "table" then
+        return
+    end
+
+    local started =
+        executor.StartExecution(
+            execution
+        )
+
+    Test(
+        "interrupt execution started",
+        started == true
+    )
+
+    executor.Update()
+
+    local interrupted =
+        executor.InterruptExecution(
+            execution,
+            "test_interrupt"
+        )
+
+    Test(
+        "interrupt returned true",
+        interrupted == true
+    )
+
+    Test(
+        "state is INTERRUPTED",
+        execution.state
+            == executor.STATES.INTERRUPTED
+    )
+
+    Test(
+        "result is INTERRUPTED",
+        execution.result
+            == executor.RESULTS.INTERRUPTED
+    )
+
+    Test(
+        "reason stored",
+        execution.reason
+            == "test_interrupt"
+    )
+
+end
+
+-- ============================================================
+-- FAILURE
+-- ============================================================
+
+local function TestFailure()
+
+    Log("=== TEST 13: FAILURE ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local action = {
+        type = "combat"
+    }
+
+    local execution =
+        executor.CreateExecution(
+            "test_action_003",
+            action
+        )
+
+    Test(
+        "failure execution created",
+        type(execution) == "table"
+    )
+
+    if type(execution) ~= "table" then
+        return
+    end
+
+    local started =
+        executor.StartExecution(
+            execution
+        )
+
+    Test(
+        "failure execution started",
+        started == true
+    )
+
+    executor.Update()
+
+    local failed =
+        executor.FailExecution(
+            execution,
+            "test_failure"
+        )
+
+    Test(
+        "failure returned true",
+        failed == true
+    )
+
+    Test(
+        "state is FAILED",
+        execution.state
+            == executor.STATES.FAILED
+    )
+
+    Test(
+        "result is FAILED",
+        execution.result
+            == executor.RESULTS.FAILED
+    )
+
+    Test(
+        "reason stored",
+        execution.reason
+            == "test_failure"
+    )
+
+end
+
+-- ============================================================
+-- CANCEL
+-- ============================================================
+
+local function TestCancel()
+
+    Log("=== TEST 14: CANCEL ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local action = {
+        type = "rest"
+    }
+
+    local execution =
+        executor.CreateExecution(
+            "test_action_004",
+            action
+        )
+
+    Test(
+        "cancel execution created",
+        type(execution) == "table"
+    )
+
+    if type(execution) ~= "table" then
+        return
+    end
+
+    local started =
+        executor.StartExecution(
+            execution
+        )
+
+    Test(
+        "cancel execution started",
+        started == true
+    )
+
+    executor.Update()
+
+    local cancelled =
+        executor.CancelExecution(
+            execution,
+            "test_cancel"
+        )
+
+    Test(
+        "cancel returned true",
+        cancelled == true
+    )
+
+    Test(
+        "state is CANCELLED",
+        execution.state
+            == executor.STATES.CANCELLED
+    )
+
+    Test(
+        "result is CANCELLED",
+        execution.result
+            == executor.RESULTS.CANCELLED
+    )
+
+    Test(
+        "reason stored",
+        execution.reason
+            == "test_cancel"
+    )
+
+end
+
+-- ============================================================
+-- HISTORY
+-- ============================================================
+
+local function TestHistory()
+
+    Log("=== TEST 15: HISTORY ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local history =
+        executor.GetExecutionHistory()
+
+    Test(
+        "history is table",
+        type(history) == "table"
+    )
+
+    Test(
+        "history contains executions",
+        #history >= 4
+    )
+
+end
+
+-- ============================================================
+-- STATISTICS
+-- ============================================================
+
+local function TestStatistics()
+
+    Log("=== TEST 16: STATISTICS ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local statistics =
+        executor.GetStatistics()
+
+    Test(
+        "statistics is table",
+        type(statistics) == "table"
+    )
+
+    if type(statistics) ~= "table" then
+        return
+    end
+
+    Test(
+        "executions created",
+        statistics.executionsCreated >= 4
+    )
+
+    Test(
+        "executions started",
+        statistics.executionsStarted >= 4
+    )
+
+    Test(
+        "executions completed",
+        statistics.executionsCompleted >= 1
+    )
+
+    Test(
+        "executions interrupted",
+        statistics.executionsInterrupted >= 1
+    )
+
+    Test(
+        "executions failed",
+        statistics.executionsFailed >= 1
+    )
+
+    Test(
+        "executions cancelled",
+        statistics.executionsCancelled >= 1
+    )
+
+end
+
+-- ============================================================
+-- STATUS
+-- ============================================================
+
+local function TestStatus()
+
+    Log("=== TEST 17: STATUS ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local status =
+        executor.GetStatus()
+
+    Test(
+        "status is table",
+        type(status) == "table"
+    )
+
+    if type(status) ~= "table" then
+        return
+    end
+
+    Test(
+        "status initialized",
+        status.initialized == true
+    )
+
+    Test(
+        "status version",
+        status.version == "1.0"
+    )
+
+    Test(
+        "status attempts",
+        status.attempts >= 1
+    )
+
+    Test(
+        "status history count",
+        status.historyCount >= 4
+    )
+
+end
+
+-- ============================================================
+-- RESET
+-- ============================================================
+
+local function TestReset()
+
+    Log("=== TEST 18: RESET ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    executor.Reset()
+
+    Test(
+        "current execution cleared",
+        executor.GetCurrentExecution()
+            == nil
+    )
+
+    Test(
+        "last execution cleared",
+        executor.GetLastExecution()
+            == nil
+    )
+
+    local history =
+        executor.GetExecutionHistory()
+
+    Test(
+        "history cleared",
+        type(history) == "table"
+        and #history == 0
+    )
+
+    local statistics =
+        executor.GetStatistics()
+
+    Test(
+        "statistics reset",
+        type(statistics) == "table"
+        and statistics.executionsCreated == 0
+    )
+
+end
+
+-- ============================================================
+-- REINITIALIZATION
+-- ============================================================
+
+local function TestReinitialization()
+
+    Log("=== TEST 19: REINITIALIZATION ===")
+
+    local executor =
+        BAO.ActionExecutor
+
+    if not executor then
+        return
+    end
+
+    local initialized =
+        executor.Initialize()
+
+    Test(
+        "Initialize returns true",
+        initialized == true
+    )
+
+    Test(
+        "executor remains initialized",
+        executor.initialized == true
+    )
+
+end
+
+-- ============================================================
+-- FINAL REPORT
+-- ============================================================
+
+local function PrintReport()
+
+    Log("========================================")
+    Log("ACTION EXECUTOR V1.0 TEST REPORT")
+    Log("========================================")
+
+    Log(
+        "TOTAL: "
+        .. tostring(TestHarness.total)
+    )
+
+    Log(
+        "PASS: "
+        .. tostring(TestHarness.pass)
+    )
+
+    Log(
+        "FAIL: "
+        .. tostring(TestHarness.fail)
+    )
+
+    if TestHarness.fail == 0 then
+
+        Log(
+            "STATUS: ALL TESTS PASSED"
+        )
+
+    else
+
+        Log(
+            "STATUS: TESTS FAILED"
+        )
+
+    end
+
+    Log("========================================")
+
+end
+
+-- ============================================================
+-- RUN TESTS
+-- ============================================================
+
+local function RunTests()
+
+    Log(
+        "Action Executor Test Harness V"
+        .. TestHarness.VERSION
+        .. " started"
+    )
+
+    TestDependencies()
+
+    if not BAO
+        or not BAO.ActionExecutor then
+
+        Log(
+            "ActionExecutor unavailable - tests stopped"
+        )
+
+        PrintReport()
+
+        return
+    end
+
+    TestInitialization()
+
+    TestExecutorTypes()
+
+    TestPlanCreation()
+
+    TestGatherPlan()
+
+    TestCombatPlan()
+
+    local execution =
+        TestExecutionCreation()
+
+    if execution then
+
+        TestValidation(execution)
+
+        TestStart(execution)
+
+        TestUpdate(execution)
+
+        TestCompletion(execution)
+
+    end
+
+    TestInterrupt()
+
+    TestFailure()
+
+    TestCancel()
+
+    TestHistory()
+
+    TestStatistics()
+
+    TestStatus()
+
+    TestReset()
+
+    TestReinitialization()
+
+    PrintReport()
+
+end
+
+-- ============================================================
+-- GAME START
+-- ============================================================
+
+if Events and Events.OnGameStart then
+
+    Events.OnGameStart.Add(
+        function()
+
+            RunTests()
+
+        end
+    )
+
+end
+
+-- ============================================================
+-- EXPORT
+-- ============================================================
+
+BAO = BAO or {}
+
+BAO.ActionExecutorTestHarness =
+    TestHarness
+
+Log(
+    "Action Executor Test Harness V"
+    .. TestHarness.VERSION
+    .. " module loaded"
+)
+
+===== AI CONTROLLER TEST =====
+-----------------------------------------------------------
+-- BanditsAIOverhaul
+-- BAO_AIControllerTestHarness.lua
+--
+-- AI Controller Test Harness V1.0
+--
+-- Tests:
+-- DecisionSystem
+-- ActionSystem
+-- AIController
+--
+-- Architecture under test:
+--
+-- Decision
+--    в†“
+-- AIController
+--    в†“
+-- Action
+--
+-- This harness is isolated from physical NPC control.
+-----------------------------------------------------------
+
+BAO = BAO or {}
+
+local Harness = {}
+
+local MODULE_NAME =
+    "BAO_AIControllerTestHarness"
+
+local VERSION = "V1.0"
+
+-----------------------------------------------------------
+-- LOG
+-----------------------------------------------------------
+
+local function Log(message)
+
+    print(
+        "[BAO][" ..
+        MODULE_NAME ..
+        "] " ..
+        tostring(message)
+    )
+
+end
+
+-----------------------------------------------------------
+-- TEST STATE
+-----------------------------------------------------------
+
+local totalTests = 0
+local passedTests = 0
+local failedTests = 0
+
+local results = {}
+
+-----------------------------------------------------------
+-- TEST RESULT
+-----------------------------------------------------------
+
+local function Test(name, condition, details)
+
+    totalTests =
+        totalTests + 1
+
+    if condition then
+
+        passedTests =
+            passedTests + 1
+
+        results[#results + 1] = {
+
+            Name = name,
+            Passed = true,
+            Details = details
+
+        }
+
+        Log(
+            "PASS: " ..
+            tostring(name)
+        )
+
+    else
+
+        failedTests =
+            failedTests + 1
+
+        results[#results + 1] = {
+
+            Name = name,
+            Passed = false,
+            Details = details
+
+        }
+
+        Log(
+            "FAIL: " ..
+            tostring(name) ..
+            (
+                details
+                and
+                " | " ..
+                tostring(details)
+                or
+                ""
+            )
+        )
+
+    end
+
+end
+
+-----------------------------------------------------------
+-- RESET TEST COUNTERS
+-----------------------------------------------------------
+
+local function ResetTests()
+
+    totalTests = 0
+    passedTests = 0
+    failedTests = 0
+    results = {}
+
+end
+
+-----------------------------------------------------------
+-- DEPENDENCY TEST
+-----------------------------------------------------------
+
+local function TestDependencies()
+
+    Log(
+        "Testing dependencies..."
+    )
+
+    Test(
+        "DecisionSystem available",
+        BAO.DecisionSystem ~= nil
+    )
+
+    Test(
+        "ActionSystem available",
+        BAO.ActionSystem ~= nil
+    )
+
+    Test(
+        "AIController available",
+        BAO.AIController ~= nil
+    )
+
+end
+
+-----------------------------------------------------------
+-- INITIALIZATION TEST
+-----------------------------------------------------------
+
+local function TestInitialization()
+
+    local controller =
+        BAO.AIController
+
+    if not controller then
+        return
+    end
+
+    local initialized =
+        controller.Initialize()
+
+    Test(
+        "AIController.Initialize()",
+        initialized == true
+    )
+
+    Test(
+        "AIController initialized",
+        controller.GetStatus()
+            .Initialized == true
+    )
+
+end
+
+-----------------------------------------------------------
+-- DECISION TEST
+-----------------------------------------------------------
+
+local function TestDecision()
+
+    local controller =
+        BAO.AIController
+
+    if not controller then
+        return
+    end
+
+    local decision =
+        controller.GetCurrentDecision()
+
+    Test(
+        "Controller has current decision",
+        decision ~= nil
+    )
+
+    if decision then
+
+        Test(
+            "Decision has ID",
+            decision.ID ~= nil
+        )
+
+        Test(
+            "Decision has score",
+            type(decision.Score)
+                == "number"
+        )
+
+    end
+
+end
+
+-----------------------------------------------------------
+-- ACTION TEST
+-----------------------------------------------------------
+
+local function TestCurrentAction()
+
+    local controller =
+        BAO.AIController
+
+    if not controller then
+        return
+    end
+
+    local action =
+        controller.GetCurrentAction()
+
+    Test(
+        "Controller has current action",
+        action ~= nil
+    )
+
+    if action then
+
+        Test(
+            "Action has ID",
+            action.id ~= nil
+        )
+
+        Test(
+            "Action has type",
+            action.type ~= nil
+        )
+
+        Test(
+            "Action is running",
+            action.state ==
+                BAO.ActionSystem.State.RUNNING
+        )
+
+    end
+
+end
+
+-----------------------------------------------------------
+-- DECISION -> ACTION TEST
+-----------------------------------------------------------
+
+local function TestDecisionActionLink()
+
+    local controller =
+        BAO.AIController
+
+    if not controller then
+        return
+    end
+
+    local decision =
+        controller.GetCurrentDecision()
+
+    local action =
+        controller.GetCurrentAction()
+
+    if not decision or not action then
+        return
+    end
+
+    Test(
+        "Decision and Action linked",
+        action.metadata ~= nil
+        and
+        action.metadata.decisionId
+            == decision.ID
+    )
+
+    Test(
+        "Action source is DecisionSystem",
+        action.metadata ~= nil
+        and
+        action.metadata.source
+            == "DecisionSystem"
+    )
+
+end
+
+-----------------------------------------------------------
+-- UPDATE STABILITY TEST
+-----------------------------------------------------------
+
+local function TestUpdateStability()
+
+    local controller =
+        BAO.AIController
+
+    if not controller then
+        return
+    end
+
+    local actionBefore =
+        controller.GetCurrentActionId()
+
+    controller.Update()
+    controller.Update()
+    controller.Update()
+
+    local actionAfter =
+        controller.GetCurrentActionId()
+
+    Test(
+        "Repeated Update does not duplicate action",
+        actionBefore == actionAfter
+    )
+
+end
+
+-----------------------------------------------------------
+-- FORCE DECISION CHANGE
+-----------------------------------------------------------
+--
+-- We deliberately use DecisionSystem's existing
+-- CalculateWithContext() to produce an isolated test
+-- result.
+--
+-- It does not alter DecisionSystem runtime state.
+--
+-- Therefore we cannot use it directly to change the
+-- controller's real decision.
+--
+-- Instead we temporarily use the public DecisionSystem
+-- runtime state by calling Recalculate() only after
+-- modifying a known WorldContext field when such a field
+-- is exposed as mutable.
+--
+-- If the current WorldContext implementation does not
+-- expose mutable test data, this test reports that fact
+-- instead of modifying internal data unsafely.
+-----------------------------------------------------------
+
+local function FindWorldContext()
+
+    if not BAO.WorldContext then
+        return nil
+    end
+
+    if BAO.WorldContext.Current then
+        return BAO.WorldContext.Current
+    end
+
+    if BAO.WorldContext.Get then
+        return BAO.WorldContext.Get()
+    end
+
+    return nil
+
+end
+
+-----------------------------------------------------------
+-- RETREAT TEST
+-----------------------------------------------------------
+
+local function TestRetreatDecision()
+
+    local decisionSystem =
+        BAO.DecisionSystem
+
+    local controller =
+        BAO.AIController
+
+    if not decisionSystem
+        or not controller then
+
+        return
+
+    end
+
+    local world =
+        FindWorldContext()
+
+    if not world then
+
+        Log(
+            "Retreat test skipped: " ..
+            "WorldContext unavailable"
+        )
+
+        return
+
+    end
+
+    -------------------------------------------------------
+    -- Build an isolated extreme danger context.
+    -------------------------------------------------------
+
+    local testContext = {
+
+        Health = 15,
+
+        Hunger = 80,
+
+        Thirst = 80,
+
+        Fatigue = 80,
+
+        Panic = 95,
+
+        Pain = 70,
+
+        ZombiesNearby = 30,
+
+        Night = false,
+
+        HasWeapon = false,
+
+        Ranged = false
+
+    }
+
+    local testResult =
+        decisionSystem.CalculateWithContext(
+            testContext
+        )
+
+    Test(
+        "Danger test calculation available",
+        testResult ~= nil
+    )
+
+    if not testResult then
+        return
+    end
+
+    Test(
+        "Danger test selects retreat",
+        testResult.Decision ~= nil
+        and
+        testResult.Decision.ID
+            == "retreat"
+    )
+
+    Log(
+        "Isolated danger decision: " ..
+        tostring(
+            testResult.Decision
+                and testResult.Decision.ID
+                or
+                nil
+        )
+    )
+
+end
+
+-----------------------------------------------------------
+-- ACTION SYSTEM MANUAL TRANSITION TEST
+-----------------------------------------------------------
+--
+-- This test verifies the controller's action interruption
+-- machinery without corrupting DecisionSystem internals.
+--
+-- We use the controller's currently running action.
+-----------------------------------------------------------
+
+local function TestActionInterruption()
+
+    local controller =
+        BAO.AIController
+
+    local actionSystem =
+        BAO.ActionSystem
+
+    if not controller
+        or not actionSystem then
+
+        return
+
+    end
+
+    local action =
+        controller.GetCurrentAction()
+
+    if not action then
+
+        Log(
+            "Action interruption test skipped: " ..
+            "no current action"
+        )
+
+        return
+
+    end
+
+    local actionId =
+        action.id
+
+    local interrupted =
+        actionSystem.InterruptAction(
+            actionId,
+            "test_harness"
+        )
+
+    Test(
+        "Current action can be interrupted",
+        interrupted == true
+    )
+
+    local after =
+        actionSystem.GetAction(
+            actionId
+        )
+
+    Test(
+        "Interrupted action has correct state",
+        after ~= nil
+        and
+        after.state ==
+            actionSystem.State.INTERRUPTED
+    )
+
+    Test(
+        "Interrupted action has correct result",
+        after ~= nil
+        and
+        after.result ==
+            actionSystem.Result.INTERRUPTED
+    )
+
+    -------------------------------------------------------
+    -- Controller must detect that the action ended.
+    -------------------------------------------------------
+
+    controller.Update()
+
+    Test(
+        "Controller detects interrupted action",
+        controller.GetCurrentAction() == nil
+    )
+
+end
+
+-----------------------------------------------------------
+-- STATUS TEST
+-----------------------------------------------------------
+
+local function TestStatus()
+
+    local controller =
+        BAO.AIController
+
+    if not controller then
+        return
+    end
+
+    local status =
+        controller.GetStatus()
+
+    Test(
+        "GetStatus() returns table",
+        type(status) == "table"
+    )
+
+    if status then
+
+        Test(
+            "Status has ControllerId",
+            status.ControllerId ~= nil
+        )
+
+        Test(
+            "Status has State",
+            status.State ~= nil
+        )
+
+        Test(
+            "Status has Statistics",
+            status.Statistics ~= nil
+        )
+
+    end
+
+end
+
+-----------------------------------------------------------
+-- STATISTICS TEST
+-----------------------------------------------------------
+
+local function TestStatistics()
+
+    local controller =
+        BAO.AIController
+
+    if not controller then
+        return
+    end
+
+    local statistics =
+        controller.GetStatistics()
+
+    Test(
+        "Statistics available",
+        type(statistics) == "table"
+    )
+
+    if statistics then
+
+        Test(
+            "Statistics track decisions",
+            type(
+                statistics.decisionsProcessed
+            ) == "number"
+        )
+
+        Test(
+            "Statistics track actions created",
+            type(
+                statistics.actionsCreated
+            ) == "number"
+        )
+
+        Test(
+            "Statistics track actions started",
+            type(
+                statistics.actionsStarted
+            ) == "number"
+        )
+
+    end
+
+end
+
+-----------------------------------------------------------
+-- RESET TEST
+-----------------------------------------------------------
+
+local function TestReset()
+
+    local controller =
+        BAO.AIController
+
+    if not controller then
+        return
+    end
+
+    local reset =
+        controller.Reset()
+
+    Test(
+        "Controller Reset()",
+        reset == true
+    )
+
+    Test(
+        "Reset clears current decision",
+        controller.GetCurrentDecision()
+            == nil
+    )
+
+    Test(
+        "Reset clears current action",
+        controller.GetCurrentAction()
+            == nil
+    )
+
+    Test(
+        "Reset returns controller to idle",
+        controller.GetState()
+            == controller.State.IDLE
+    )
+
+    -------------------------------------------------------
+    -- Reinitialize after reset.
+    -------------------------------------------------------
+
+    local initialized =
+        controller.Initialize()
+
+    Test(
+        "Controller remains initialized after reset",
+        initialized == true
+    )
+
+end
+
+-----------------------------------------------------------
+-- MAIN TEST
+-----------------------------------------------------------
+
+function Harness.Run()
+
+    ResetTests()
+
+    Log(
+        "========================================"
+    )
+
+    Log(
+        "AI Controller Test Harness " ..
+        VERSION
+    )
+
+    Log(
+        "========================================"
+    )
+
+    -------------------------------------------------------
+    -- Dependencies
+    -------------------------------------------------------
+
+    TestDependencies()
+
+    if not BAO.AIController then
+
+        Log(
+            "AIController unavailable. " ..
+            "Tests stopped."
+        )
+
+        return false
+
+    end
+
+    -------------------------------------------------------
+    -- Initialize
+    -------------------------------------------------------
+
+    TestInitialization()
+
+    -------------------------------------------------------
+    -- Update controller once.
+    --
+    -- This allows the controller to obtain the current
+    -- DecisionSystem decision and create its Action.
+    -------------------------------------------------------
+
+    BAO.AIController.Update()
+
+    -------------------------------------------------------
+    -- Core tests
+    -------------------------------------------------------
+
+    TestDecision()
+
+    TestCurrentAction()
+
+    TestDecisionActionLink()
+
+    TestUpdateStability()
+
+    TestRetreatDecision()
+
+    TestActionInterruption()
+
+    TestStatus()
+
+    TestStatistics()
+
+    -------------------------------------------------------
+    -- Reset
+    -------------------------------------------------------
+
+    TestReset()
+
+    -------------------------------------------------------
+    -- Final report
+    -------------------------------------------------------
+
+    Log(
+        "========================================"
+    )
+
+    Log(
+        "AI CONTROLLER TEST RESULTS"
+    )
+
+    Log(
+        "TOTAL: " ..
+        tostring(totalTests)
+    )
+
+    Log(
+        "PASS: " ..
+        tostring(passedTests)
+    )
+
+    Log(
+        "FAIL: " ..
+        tostring(failedTests)
+    )
+
+    if failedTests == 0 then
+
+        Log(
+            "STATUS: ALL TESTS PASSED"
+        )
+
+    else
+
+        Log(
+            "STATUS: TESTS FAILED"
+        )
+
+    end
+
+    Log(
+        "========================================"
+    )
+
+    return failedTests == 0
+
+end
+
+-----------------------------------------------------------
+-- GET RESULTS
+-----------------------------------------------------------
+
+function Harness.GetResults()
+
+    return results
+
+end
+
+-----------------------------------------------------------
+-- GET SUMMARY
+-----------------------------------------------------------
+
+function Harness.GetSummary()
+
+    return {
+
+        Total = totalTests,
+
+        Passed = passedTests,
+
+        Failed = failedTests,
+
+        Success =
+            failedTests == 0
+
+    }
+
+end
+
+-----------------------------------------------------------
+-- GAME START
+-----------------------------------------------------------
+
+if Events and Events.OnGameStart then
+
+    Events.OnGameStart.Add(
+
+        function()
+
+            Log(
+                "OnGameStart"
+            )
+
+            ------------------------------------------------
+            -- Delay is not required here.
+            --
+            -- Harness.Run() itself checks dependencies
+            -- and the controller can initialize when
+            -- dependencies become available.
+            ------------------------------------------------
+
+            Harness.Run()
+
+        end
+
+    )
+
+end
+
+-----------------------------------------------------------
+-- EXPORT
+-----------------------------------------------------------
+
+BAO.AIControllerTestHarness =
+    Harness
+
+-----------------------------------------------------------
+-- MODULE LOADED
+-----------------------------------------------------------
+
+Log(
+    "AI Controller Test Harness " ..
+    VERSION ..
+    " module loaded"
+)
+
+===== DEBUG UI =====
+---------------------------------------------------------
+-- Bandits AI Overhaul
+-- BAO_DebugUI.lua
+-- V1.8
+--
+-- BAO Developer Debug UI
+--
+-- F10:
+-- Open / Close
+--
+-- AI TESTS:
+-- Decision System scenario testing.
+---------------------------------------------------------
+
+require "ISUI/ISCollapsableWindow"
+require "ISUI/ISButton"
+
+---------------------------------------------------------
+-- SAFE REFERENCES
+---------------------------------------------------------
+
+local ISCollapsableWindowClass =
+    _G["ISCollapsableWindow"]
+
+local ISButtonClass =
+    _G["ISButton"]
+
+local UIFontClass =
+    _G["UIFont"]
+
+local KeyboardClass =
+    _G["Keyboard"]
+
+local getCoreFunction =
+    _G["getCore"]
+
+---------------------------------------------------------
+-- BAO
+---------------------------------------------------------
+
+BAO = BAO or {}
+
+BAO.DebugUI = BAO.DebugUI or {}
+
+---------------------------------------------------------
+-- WINDOW CLASS
+---------------------------------------------------------
+
+local BAODebugWindow =
+    ISCollapsableWindowClass:derive(
+        "BAO_DebugUI"
+    )
+
+BAODebugWindow.instance = nil
+
+---------------------------------------------------------
+-- TEST STATE
+---------------------------------------------------------
+
+BAODebugWindow.lastScenario = "NONE"
+
+BAODebugWindow.lastDecision = "NONE"
+
+BAODebugWindow.lastScore = 0
+
+BAODebugWindow.lastPriority = 0
+
+BAODebugWindow.lastTestStatus = "READY"
+
+---------------------------------------------------------
+-- CONSTRUCTOR
+---------------------------------------------------------
+
+function BAODebugWindow:new(
+    x,
+    y,
+    width,
+    height
+)
+
+    local o =
+        ISCollapsableWindowClass:new(
+            x,
+            y,
+            width,
+            height
+        )
+
+    setmetatable(o, self)
+
+    self.__index = self
+
+    o.x = x
+    o.y = y
+
+    o.width = width
+    o.height = height
+
+    o.title = "BAO Debug UI"
+
+    o.resizable = false
+
+    o.drawFrame = true
+
+    o.backgroundColor = {
+
+        r = 0.05,
+        g = 0.05,
+        b = 0.05,
+        a = 0.97
+    }
+
+    o.borderColor = {
+
+        r = 0.4,
+        g = 0.4,
+        b = 0.4,
+        a = 1
+    }
+
+    return o
+
+end
+
+---------------------------------------------------------
+-- CREATE CHILDREN
+---------------------------------------------------------
+
+function BAODebugWindow:createChildren()
+
+    ISCollapsableWindowClass.createChildren(
+        self
+    )
+
+    local titleBar =
+        self:titleBarHeight()
+
+    -----------------------------------------------------
+    -- BASIC TEST
+    -----------------------------------------------------
+
+    self.testButton =
+        ISButtonClass:new(
+            20,
+            titleBar + 65,
+            180,
+            30,
+            "TEST BUTTON",
+            self,
+            BAODebugWindow.onTestButton
+        )
+
+    self.testButton:initialise()
+
+    self:addChild(
+        self.testButton
+    )
+
+    -----------------------------------------------------
+    -- AI TEST BUTTONS
+    -----------------------------------------------------
+
+    local startY =
+        titleBar + 105
+
+    local buttonWidth = 175
+    local buttonHeight = 26
+
+    local gap = 6
+
+    -----------------------------------------------------
+    -- LEFT COLUMN
+    -----------------------------------------------------
+
+    self.normalButton =
+        self:createTestButton(
+            20,
+            startY,
+            buttonWidth,
+            buttonHeight,
+            "NORMAL",
+            "NORMAL"
+        )
+
+    self.lowHealthButton =
+        self:createTestButton(
+            20,
+            startY + (buttonHeight + gap),
+            buttonWidth,
+            buttonHeight,
+            "LOW HEALTH",
+            "LOW_HEALTH"
+        )
+
+    self.highFatigueButton =
+        self:createTestButton(
+            20,
+            startY + (buttonHeight + gap) * 2,
+            buttonWidth,
+            buttonHeight,
+            "HIGH FATIGUE",
+            "HIGH_FATIGUE"
+        )
+
+    self.manyZombiesButton =
+        self:createTestButton(
+            20,
+            startY + (buttonHeight + gap) * 3,
+            buttonWidth,
+            buttonHeight,
+            "MANY ZOMBIES",
+            "MANY_ZOMBIES"
+        )
+
+    self.nightButton =
+        self:createTestButton(
+            20,
+            startY + (buttonHeight + gap) * 4,
+            buttonWidth,
+            buttonHeight,
+            "NIGHT",
+            "NIGHT"
+        )
+
+    -----------------------------------------------------
+    -- RIGHT COLUMN
+    -----------------------------------------------------
+
+    local rightX =
+        215
+
+    self.noWeaponButton =
+        self:createTestButton(
+            rightX,
+            startY,
+            buttonWidth,
+            buttonHeight,
+            "NO WEAPON",
+            "NO_WEAPON"
+        )
+
+    self.hungryButton =
+        self:createTestButton(
+            rightX,
+            startY + (buttonHeight + gap),
+            buttonWidth,
+            buttonHeight,
+            "HUNGRY",
+            "HUNGRY"
+        )
+
+    self.thirstyButton =
+        self:createTestButton(
+            rightX,
+            startY + (buttonHeight + gap) * 2,
+            buttonWidth,
+            buttonHeight,
+            "THIRSTY",
+            "THIRSTY"
+        )
+
+    self.panicButton =
+        self:createTestButton(
+            rightX,
+            startY + (buttonHeight + gap) * 3,
+            buttonWidth,
+            buttonHeight,
+            "PANIC",
+            "PANIC"
+        )
+
+    self.runAllButton =
+        self:createTestButton(
+            rightX,
+            startY + (buttonHeight + gap) * 4,
+            buttonWidth,
+            buttonHeight,
+            "RUN ALL TESTS",
+            "RUN_ALL"
+        )
+
+end
+
+---------------------------------------------------------
+-- CREATE TEST BUTTON
+---------------------------------------------------------
+
+function BAODebugWindow:createTestButton(
+    x,
+    y,
+    width,
+    height,
+    title,
+    scenario
+)
+
+    local button =
+        ISButtonClass:new(
+            x,
+            y,
+            width,
+            height,
+            title,
+            self,
+            BAODebugWindow.onScenarioButton
+        )
+
+    button.scenario =
+        scenario
+
+    button:initialise()
+
+    self:addChild(button)
+
+    return button
+
+end
+
+---------------------------------------------------------
+-- RENDER
+---------------------------------------------------------
+
+function BAODebugWindow:render()
+
+    ISCollapsableWindowClass.render(
+        self
+    )
+
+    local titleBar =
+        self:titleBarHeight()
+
+    -----------------------------------------------------
+    -- HEADER
+    -----------------------------------------------------
+
+    self:drawText(
+        "Bandits AI Overhaul",
+        20,
+        titleBar + 15,
+        1,
+        1,
+        1,
+        1,
+        UIFontClass.Small
+    )
+
+    -----------------------------------------------------
+    -- STATUS
+    -----------------------------------------------------
+
+    self:drawText(
+        "DEBUG STATUS: ACTIVE",
+        20,
+        titleBar + 42,
+        0.5,
+        1,
+        0.5,
+        1,
+        UIFontClass.Small
+    )
+
+    -----------------------------------------------------
+    -- LAST TEST
+    -----------------------------------------------------
+
+    self:drawText(
+        "Scenario: "
+        .. tostring(
+            self.lastScenario
+        ),
+        20,
+        self.height - 75,
+        0.8,
+        0.8,
+        0.8,
+        1,
+        UIFontClass.Small
+    )
+
+    self:drawText(
+        "Decision: "
+        .. tostring(
+            self.lastDecision
+        ),
+        20,
+        self.height - 55,
+        1,
+        1,
+        1,
+        1,
+        UIFontClass.Small
+    )
+
+    self:drawText(
+        "Score: "
+        .. tostring(
+            self.lastScore
+        )
+        .. "  Priority: "
+        .. tostring(
+            self.lastPriority
+        ),
+        20,
+        self.height - 35,
+        0.8,
+        0.8,
+        0.8,
+        1,
+        UIFontClass.Small
+    )
+
+    self:drawText(
+        "Status: "
+        .. tostring(
+            self.lastTestStatus
+        ),
+        220,
+        self.height - 35,
+        0.6,
+        1,
+        0.6,
+        1,
+        UIFontClass.Small
+    )
+
+end
+
+---------------------------------------------------------
+-- BASIC TEST
+---------------------------------------------------------
+
+function BAODebugWindow:onTestButton()
+
+    print(
+        "[BAO][DebugUI] TEST BUTTON PRESSED"
+    )
+
+    self.lastScenario = "UI_TEST"
+
+    self.lastDecision = "UI_OK"
+
+    self.lastScore = 0
+
+    self.lastPriority = 0
+
+    self.lastTestStatus = "SUCCESS"
+
+end
+
+---------------------------------------------------------
+-- RUN SCENARIO
+---------------------------------------------------------
+
+function BAODebugWindow:runScenario(
+    scenarioName
+)
+
+    if not BAO.AITestHarness then
+
+        print(
+            "[BAO][DebugUI] ERROR: "
+            .. "AITestHarness unavailable"
+        )
+
+        self.lastTestStatus =
+            "HARNESS UNAVAILABLE"
+
+        return
+
+    end
+
+    if not BAO.AITestHarness.RunScenario then
+
+        print(
+            "[BAO][DebugUI] ERROR: "
+            .. "RunScenario unavailable"
+        )
+
+        self.lastTestStatus =
+            "RUNNER UNAVAILABLE"
+
+        return
+
+    end
+
+    print(
+        "[BAO][DebugUI] Running scenario: "
+        .. tostring(
+            scenarioName
+        )
+    )
+
+    local result =
+        BAO.AITestHarness.RunScenario(
+            scenarioName
+        )
+
+    if not result then
+
+        self.lastScenario =
+            tostring(
+                scenarioName
+            )
+
+        self.lastDecision =
+            "FAILED"
+
+        self.lastScore = 0
+
+        self.lastPriority = 0
+
+        self.lastTestStatus =
+            "FAILED"
+
+        return
+
+    end
+
+    self.lastScenario =
+        tostring(
+            result.Scenario
+        )
+
+    self.lastDecision =
+        tostring(
+            result.Decision
+        )
+
+    self.lastScore =
+        result.Score or 0
+
+    self.lastPriority =
+        result.Priority or 0
+
+    self.lastTestStatus =
+        "PASS"
+
+end
+
+---------------------------------------------------------
+-- SCENARIO BUTTON
+---------------------------------------------------------
+
+function BAODebugWindow:onScenarioButton(
+    button
+)
+
+    if not button then
+        return
+    end
+
+    local scenario =
+        button.scenario
+
+    if not scenario then
+        return
+    end
+
+    if scenario == "RUN_ALL" then
+
+        self:runAllTests()
+
+        return
+    end
+
+    self:runScenario(
+        scenario
+    )
+
+end
+
+---------------------------------------------------------
+-- RUN ALL
+---------------------------------------------------------
+
+function BAODebugWindow:runAllTests()
+
+    if not BAO.AITestHarness then
+
+        print(
+            "[BAO][DebugUI] ERROR: "
+            .. "AITestHarness unavailable"
+        )
+
+        self.lastTestStatus =
+            "HARNESS UNAVAILABLE"
+
+        return
+    end
+
+    print(
+        "[BAO][DebugUI] RUNNING ALL AI TESTS"
+    )
+
+    local result =
+        BAO.AITestHarness.RunAll()
+
+    if not result then
+
+        self.lastScenario =
+            "ALL"
+
+        self.lastDecision =
+            "FAILED"
+
+        self.lastScore = 0
+
+        self.lastPriority = 0
+
+        self.lastTestStatus =
+            "FAILED"
+
+        return
+    end
+
+    self.lastScenario =
+        "ALL"
+
+    self.lastDecision =
+        tostring(
+            result.Passed
+        )
+        .. "/"
+        .. tostring(
+            result.Total
+        )
+        .. " PASSED"
+
+    self.lastScore = 0
+
+    self.lastPriority = 0
+
+    self.lastTestStatus =
+        "COMPLETE"
+
+end
+
+---------------------------------------------------------
+-- CLOSE
+---------------------------------------------------------
+
+function BAODebugWindow:close()
+
+    print(
+        "[BAO][DebugUI] Close()"
+    )
+
+    self:setVisible(false)
+
+    self:removeFromUIManager()
+
+    BAODebugWindow.instance =
+        nil
+
+end
+
+---------------------------------------------------------
+-- CREATE
+---------------------------------------------------------
+
+function BAO.DebugUI.Create()
+
+    if BAODebugWindow.instance then
+
+        if BAODebugWindow.instance:isVisible() then
+
+            return BAODebugWindow.instance
+
+        end
+
+    end
+
+    local screenWidth =
+        getCoreFunction():getScreenWidth()
+
+    local screenHeight =
+        getCoreFunction():getScreenHeight()
+
+    local width = 410
+
+    local height = 390
+
+    local x =
+        math.floor(
+            (screenWidth - width) / 2
+        )
+
+    local y =
+        math.floor(
+            (screenHeight - height) / 2
+        )
+
+    print(
+        "[BAO][DebugUI] Creating V1.8 window at "
+        .. tostring(x)
+        .. ", "
+        .. tostring(y)
+    )
+
+    local window =
+        BAODebugWindow:new(
+            x,
+            y,
+            width,
+            height
+        )
+
+    window:initialise()
+
+    window:addToUIManager()
+
+    BAODebugWindow.instance =
+        window
+
+    print(
+        "[BAO][DebugUI] Window created successfully"
+    )
+
+    return window
+
+end
+
+---------------------------------------------------------
+-- OPEN
+---------------------------------------------------------
+
+function BAO.DebugUI.Open()
+
+    print(
+        "[BAO][DebugUI] Open()"
+    )
+
+    local window =
+        BAO.DebugUI.Create()
+
+    if window then
+
+        window:setVisible(true)
+
+        print(
+            "[BAO][DebugUI] Window visible"
+        )
+
+    end
+
+end
+
+---------------------------------------------------------
+-- CLOSE
+---------------------------------------------------------
+
+function BAO.DebugUI.Close()
+
+    print(
+        "[BAO][DebugUI] Close()"
+    )
+
+    if BAODebugWindow.instance then
+
+        BAODebugWindow.instance:close()
+
+    end
+
+end
+
+---------------------------------------------------------
+-- TOGGLE
+---------------------------------------------------------
+
+function BAO.DebugUI.Toggle()
+
+    if BAODebugWindow.instance
+        and BAODebugWindow.instance:isVisible() then
+
+        BAO.DebugUI.Close()
+
+    else
+
+        BAO.DebugUI.Open()
+
+    end
+
+end
+
+---------------------------------------------------------
+-- F10
+---------------------------------------------------------
+
+function BAO.DebugUI.OnKeyStartPressed(
+    key
+)
+
+    if key ==
+        KeyboardClass.KEY_F10 then
+
+        print(
+            "[BAO][DebugUI] F10 detected"
+        )
+
+        BAO.DebugUI.Toggle()
+
+    end
+
+end
+
+---------------------------------------------------------
+-- GAME START
+---------------------------------------------------------
+
+function BAO.DebugUI.OnGameStart()
+
+    print(
+        "[BAO][DebugUI] OnGameStart"
+    )
+
+end
+
+---------------------------------------------------------
+-- EVENTS
+---------------------------------------------------------
+
+if Events then
+
+    if Events.OnKeyStartPressed then
+
+        Events.OnKeyStartPressed.Add(
+            BAO.DebugUI.OnKeyStartPressed
+        )
+
+        print(
+            "[BAO][DebugUI] "
+            .. "OnKeyStartPressed registered"
+        )
+
+    end
+
+    if Events.OnGameStart then
+
+        Events.OnGameStart.Add(
+            BAO.DebugUI.OnGameStart
+        )
+
+        print(
+            "[BAO][DebugUI] "
+            .. "OnGameStart registered"
+        )
+
+    end
+
+end
+
+---------------------------------------------------------
+-- LOADED
+---------------------------------------------------------
+
+print(
+    "[BAO][DebugUI] V1.8 loaded"
+)

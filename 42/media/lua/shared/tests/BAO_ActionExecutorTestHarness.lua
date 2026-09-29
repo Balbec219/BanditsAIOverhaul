@@ -2,12 +2,12 @@
 -- BanditsAIOverhaul
 -- BAO_ActionExecutorTestHarness.lua
 --
--- Action Executor V1.0 Test Harness
+-- Action Executor V1.2 Test Harness
 -- ============================================================
 
 local TestHarness = {}
 
-TestHarness.VERSION = "1.0"
+TestHarness.VERSION = "1.2"
 
 TestHarness.total = 0
 TestHarness.pass = 0
@@ -105,7 +105,7 @@ local function TestInitialization()
         )
 
         Test(
-            "Version is 1.0",
+            "Version is 1.2",
             false
         )
 
@@ -122,8 +122,8 @@ local function TestInitialization()
     )
 
     Test(
-        "Version is 1.0",
-        executor.VERSION == "1.0"
+        "Version is 1.2",
+        executor.VERSION == "1.2"
     )
 
 end
@@ -1022,7 +1022,7 @@ local function TestStatus()
 
     Test(
         "status version",
-        status.version == "1.0"
+        status.version == "1.2"
     )
 
     Test(
@@ -1123,7 +1123,7 @@ end
 local function PrintReport()
 
     Log("========================================")
-    Log("ACTION EXECUTOR V1.0 TEST REPORT")
+    Log("ACTION EXECUTOR V1.2 TEST REPORT")
     Log("========================================")
 
     Log(

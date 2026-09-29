@@ -2,7 +2,7 @@
 -- BanditsAIOverhaul
 -- BAO_AIController.lua
 --
--- AI Controller V1.0
+-- AI Controller V1.2
 --
 -- Architecture:
 --
@@ -16,7 +16,7 @@
 --       ↓
 -- Action
 --
--- V1.0:
+-- V1.2:
 -- - Connects DecisionSystem with ActionSystem
 -- - Maintains current AI decision
 -- - Maintains current action
@@ -42,7 +42,7 @@ local AIController = {}
 -- VERSION
 -----------------------------------------------------------
 
-AIController.Version = "V1.0"
+AIController.Version = "V1.2"
 
 local MODULE_NAME = "BAO_AIController"
 
@@ -141,6 +141,8 @@ local previousDecision = nil
 local currentAction = nil
 
 local currentActionId = nil
+local currentExecution = nil
+local patrolContext = nil
 
 local lastAction = nil
 
@@ -178,7 +180,7 @@ local statistics = {
 -- CONTROLLER ID
 -----------------------------------------------------------
 --
--- V1.0 has one global controller.
+-- V1.2 has one global controller.
 --
 -- The architecture intentionally keeps an identity field
 -- so that later this can become one controller per NPC.
@@ -370,7 +372,7 @@ end
 
 local function RecordActionResult(action)
 
-    if not action then
+    if not action or lastAction == action then
         return
     end
 
@@ -389,9 +391,7 @@ local function RecordActionResult(action)
         Reason = action.reason,
 
         Decision =
-            currentDecision
-                and currentDecision.ID
-                or nil
+            action.metadata and action.metadata.decisionId or nil
 
     }
 
@@ -425,9 +425,7 @@ local function RecordActionResult(action)
         Reason = action.reason,
 
         Decision =
-            currentDecision
-                and currentDecision.ID
-                or nil
+            action.metadata and action.metadata.decisionId or nil
 
     })
 
@@ -495,7 +493,8 @@ local function CreateActionForDecision(decision)
                 priority =
                     decision.Priority or 0,
 
-                duration = 3600,
+                duration = 0,
+                externalCompletion = true,
 
                 interruptible = true,
 
@@ -580,6 +579,9 @@ local function CreateActionForDecision(decision)
 
         )
 
+    if actionType == "patrol" and patrolContext then
+        action.metadata.navigation = patrolContext
+    end
     return action
 
 end
@@ -589,275 +591,113 @@ end
 -----------------------------------------------------------
 
 local function StartActionForDecision(decision)
-
-    if not decision then
-        return false
+    local system = GetActionSystem()
+    local executor = BAO.ActionExecutor
+    if not system or not executor then return false end
+    if executor.GetCurrentExecution() then
+        return false, "executor_busy"
     end
 
-    local actionSystem =
-        GetActionSystem()
-
-    if not actionSystem then
-        return false
+    local action = CreateActionForDecision(decision)
+    if not action then return false, "invalid_decision" end
+    statistics.actionsCreated = statistics.actionsCreated + 1
+    if not system.RegisterAction(action) then return false, "registration_failed" end
+    if not system.StartAction(action.id) then
+        RecordActionResult(action)
+        return false, "action_start_failed"
     end
 
-    local action =
-        CreateActionForDecision(
-            decision
-        )
-
-    if not action then
-
-        controllerState =
-            AIController.State.ERROR
-
-        return false
-
-    end
-
-    statistics.actionsCreated =
-        statistics.actionsCreated + 1
-
-    local registered =
-        actionSystem.RegisterAction(
-            action
-        )
-
-    if not registered then
-
-        Log(
-            "Failed to register action: " ..
-            tostring(action.id)
-        )
-
-        controllerState =
-            AIController.State.ERROR
-
-        return false
-
-    end
-
-    local started =
-        actionSystem.StartAction(
-            action.id
-        )
-
+    local execution = executor.CreateExecution(action.id, action, {
+        linkedAction = true,
+        controllerId = controllerId,
+        source = "AIController"
+    })
+    local started, reason = executor.StartExecution(execution)
     if not started then
-
-        Log(
-            "Failed to start action: " ..
-            tostring(action.id)
-        )
-
-        controllerState =
-            AIController.State.ERROR
-
-        return false
-
+        system.FailAction(action.id, system.Result.FAILED, reason or "execution_start_failed")
+        RecordActionResult(action)
+        return false, reason
     end
 
-    currentActionId =
-        action.id
-
-    currentAction =
-        action
-
-    statistics.actionsStarted =
-        statistics.actionsStarted + 1
-
-    controllerState =
-        AIController.State.EXECUTING
-
-    Log(
-        "Controller started action: " ..
-        tostring(action.type) ..
-        " for decision=" ..
-        tostring(decision.ID)
-    )
-
+    currentActionId = action.id
+    currentAction = action
+    currentExecution = execution
+    statistics.actionsStarted = statistics.actionsStarted + 1
+    controllerState = AIController.State.EXECUTING
+    Log("Controller started pair: action=" .. action.id
+        .. " execution=" .. execution.id .. " decision=" .. tostring(decision.ID))
     return true
-
 end
-
------------------------------------------------------------
--- INTERRUPT CURRENT ACTION
------------------------------------------------------------
 
 local function InterruptCurrentAction(reason)
-
     RefreshCurrentAction()
-
-    if not currentAction then
-        return false
+    if not currentAction then return false end
+    local executor = BAO.ActionExecutor
+    if not IsActionFinished(currentAction) then
+        local interrupted
+        if currentExecution and executor then
+            interrupted = executor.InterruptExecution(currentExecution, reason or "controller_interrupt")
+        else
+            interrupted = BAO.ActionSystem.InterruptAction(currentAction.id, reason or "controller_interrupt")
+        end
+        if not interrupted then
+            controllerState = AIController.State.EXECUTING
+            return false
+        end
+    elseif currentExecution and executor then
+        executor.SyncActionState(currentExecution)
+        if not currentExecution._finished then return false end
     end
-
-    if IsActionFinished(currentAction) then
-
-        RecordActionResult(
-            currentAction
-        )
-
-        return false
-
-    end
-
-    local actionSystem =
-        GetActionSystem()
-
-    if not actionSystem then
-        return false
-    end
-
-    controllerState =
-        AIController.State.INTERRUPTING
-
-    local interrupted =
-        actionSystem.InterruptAction(
-
-            currentAction.id,
-
-            reason or
-                "controller_interrupt"
-
-        )
-
-    if interrupted then
-
-        RefreshCurrentAction()
-
-        RecordActionResult(
-            currentAction
-        )
-
-        Log(
-            "Current action interrupted: " ..
-            tostring(
-                currentAction.id
-            )
-        )
-
-        currentAction = nil
-        currentActionId = nil
-
-        return true
-
-    end
-
-    return false
-
+    RecordActionResult(currentAction)
+    currentAction = nil
+    currentActionId = nil
+    currentExecution = nil
+    return true
 end
-
------------------------------------------------------------
--- APPLY NEW DECISION
------------------------------------------------------------
 
 local function ApplyDecision(decision)
+    if not decision or not GetActionType(decision) then return false end
 
-    if not decision then
-        return false
-    end
-
-    local newDecisionId =
-        decision.ID
-
-    if not newDecisionId then
-
-        Log(
-            "Decision has no ID"
-        )
-
-        return false
-
-    end
-
-    -------------------------------------------------------
-    -- First decision
-    -------------------------------------------------------
-
-    if currentDecision == nil then
-
-        previousDecision = nil
-
-        currentDecision =
-            decision
-
-        statistics.decisionsProcessed =
-            statistics.decisionsProcessed + 1
-
-        Log(
-            "Controller received initial decision: " ..
-            tostring(newDecisionId)
-        )
-
-        return
-            StartActionForDecision(
-                decision
-            )
-
-    end
-
-    -------------------------------------------------------
-    -- Same decision
-    -------------------------------------------------------
-
-    if currentDecision.ID ==
-        newDecisionId then
-
-        currentDecision =
-            decision
-
+    -- A consumed decision stays waiting until it changes or RestartCurrentDecision
+    -- is explicitly called. This prevents retries/fake completions every tick.
+    if currentDecision and currentDecision.ID == decision.ID then
+        currentDecision = decision
         return true
-
     end
 
-    -------------------------------------------------------
-    -- Decision changed
-    -------------------------------------------------------
+    if currentAction and not InterruptCurrentAction("decision_changed") then
+        return true -- Keep the old decision and its non-interruptible pair.
+    end
+    if BAO.ActionExecutor.GetCurrentExecution() then
+        controllerState = AIController.State.WAITING
+        return true -- Retry when the executor becomes free, without allocating actions.
+    end
 
-    previousDecision =
-        currentDecision
-
-    currentDecision =
-        decision
-
-    statistics.decisionsProcessed =
-        statistics.decisionsProcessed + 1
-
-    Log(
-        "Controller decision changed: " ..
-        tostring(previousDecision.ID) ..
-        " -> " ..
-        tostring(currentDecision.ID)
-    )
-
-    -------------------------------------------------------
-    -- Old action is no longer valid.
-    -------------------------------------------------------
-
-    InterruptCurrentAction(
-        "decision_changed"
-    )
-
-    -------------------------------------------------------
-    -- Start new action.
-    -------------------------------------------------------
-
-    return
-        StartActionForDecision(
-            currentDecision
-        )
-
+    local oldDecision = currentDecision
+    local started = StartActionForDecision(decision)
+    previousDecision = oldDecision
+    currentDecision = decision
+    statistics.decisionsProcessed = statistics.decisionsProcessed + 1
+    return started
 end
-
------------------------------------------------------------
--- CHECK ACTION STATE
------------------------------------------------------------
 
 local function UpdateCurrentAction()
 
+    local trackedAction = currentAction or (currentExecution and currentExecution.action)
+    if currentExecution and BAO.ActionExecutor then
+        BAO.ActionExecutor.SyncActionState(currentExecution)
+    end
     RefreshCurrentAction()
 
     if not currentAction then
+        if trackedAction and currentExecution and currentExecution.reason == "linked_action_missing" then
+            trackedAction.state = BAO.ActionSystem.State.FAILED
+            trackedAction.result = BAO.ActionSystem.Result.FAILED
+            trackedAction.reason = "linked_action_missing"
+            trackedAction._finished = true
+            RecordActionResult(trackedAction)
+            currentActionId, currentExecution = nil, nil
+        end
         return
     end
 
@@ -868,6 +708,9 @@ local function UpdateCurrentAction()
     if IsActionFinished(
         currentAction
     ) then
+
+        -- A terminal Action must not release a still-owned path after cleanup failed.
+        if currentExecution and not currentExecution._finished then return end
 
         RecordActionResult(
             currentAction
@@ -886,6 +729,7 @@ local function UpdateCurrentAction()
 
         currentAction = nil
         currentActionId = nil
+        currentExecution = nil
 
         controllerState =
             AIController.State.WAITING
@@ -937,12 +781,8 @@ function AIController.Update()
 
     if not decision then
 
-        Log(
-            "No decision available"
-        )
-
-        controllerState =
-            AIController.State.WAITING
+        controllerState = currentAction and AIController.State.EXECUTING
+            or AIController.State.WAITING
 
         return false
 
@@ -1074,6 +914,38 @@ end
 -- GET CURRENT ACTION ID
 -----------------------------------------------------------
 
+-- Bind an existing non-player character for the next patrol decision.
+-- No spawning, teleporting, or commandeering the player's input occurs here.
+function AIController.SetPatrolTarget(character, x, y, z, options)
+    if currentAction then return false, "controller_busy" end
+    local navigation = BAO.NavigationSystem
+    if not navigation or not navigation.IsValidCharacter(character)
+        or not navigation.ValidateTarget(navigation.CreateLocationTarget(x, y, z)) then
+        return false, "invalid_patrol_target"
+    end
+    local copiedOptions = {}
+    for key, value in pairs(options or {}) do copiedOptions[key] = value end
+    patrolContext = { character = character, x = x, y = y, z = z, options = copiedOptions }
+    return true
+end
+
+function AIController.ClearPatrolTarget()
+    if currentAction then return false end
+    patrolContext = nil
+    return true
+end
+
+function AIController.GetCurrentExecution()
+    return currentExecution
+end
+
+-- Explicit retry after a completed/failed/stopped decision; never auto-loop.
+function AIController.RestartCurrentDecision()
+    UpdateCurrentAction()
+    if currentAction or not currentDecision then return false end
+    return StartActionForDecision(currentDecision)
+end
+
 function AIController.GetCurrentActionId()
 
     return currentActionId
@@ -1150,6 +1022,7 @@ function AIController.GetStatus()
 
         CurrentActionId =
             currentActionId,
+        CurrentExecution = currentExecution,
 
         LastAction =
             lastAction,
@@ -1199,9 +1072,9 @@ function AIController.Reset()
 
     if currentAction then
 
-        InterruptCurrentAction(
-            "controller_reset"
-        )
+        if not InterruptCurrentAction("controller_reset") then
+            return false
+        end
 
     end
 
@@ -1216,6 +1089,8 @@ function AIController.Reset()
     currentAction = nil
 
     currentActionId = nil
+    currentExecution = nil
+    patrolContext = nil
 
     lastAction = nil
 
@@ -1253,6 +1128,38 @@ end
 -----------------------------------------------------------
 -- INITIALIZE
 -----------------------------------------------------------
+
+-- Synchronous harness scope. Public dependencies are isolated by the harness;
+-- private controller state is restored even if an assertion/callback throws.
+function AIController.WithIsolatedState(callback)
+    local saved = {
+        initialized = initialized, attempts = attempts, state = controllerState,
+        decision = currentDecision, previous = previousDecision,
+        action = currentAction, actionId = currentActionId, execution = currentExecution,
+        last = lastAction, result = lastActionResult, history = actionHistory,
+        statistics = statistics, patrolContext = patrolContext
+    }
+    initialized = false
+    attempts = 0
+    controllerState = AIController.State.IDLE
+    currentDecision, previousDecision = nil, nil
+    currentAction, currentActionId, currentExecution = nil, nil, nil
+    patrolContext = nil
+    lastAction, lastActionResult = nil, nil
+    actionHistory = {}
+    statistics = {
+        decisionsProcessed = 0, actionsCreated = 0, actionsStarted = 0,
+        actionsCompleted = 0, actionsFailed = 0, actionsInterrupted = 0
+    }
+    local ok, result = pcall(callback)
+    initialized, attempts, controllerState = saved.initialized, saved.attempts, saved.state
+    currentDecision, previousDecision = saved.decision, saved.previous
+    currentAction, currentActionId, currentExecution = saved.action, saved.actionId, saved.execution
+    lastAction, lastActionResult, actionHistory = saved.last, saved.result, saved.history
+    statistics = saved.statistics
+    patrolContext = saved.patrolContext
+    return ok, result
+end
 
 function AIController.Initialize()
 
@@ -1301,6 +1208,9 @@ function AIController.Initialize()
     -------------------------------------------------------
     -- Initialize ActionSystem.
     -------------------------------------------------------
+
+    local executor = BAO.ActionExecutor
+    if not executor or not executor.Initialize() then return false end
 
     if actionSystem.Initialize then
 

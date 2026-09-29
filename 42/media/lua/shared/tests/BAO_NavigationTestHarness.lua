@@ -1,8 +1,8 @@
 --[[
     BanditsAIOverhaul
-    Navigation Test Harness V1.2
+    Navigation Test Harness V1.3
 
-    Tests NavigationSystem V1.2.
+    Tests NavigationSystem V1.3.
 
     This harness validates the public NavigationSystem API
     without requiring a real character movement test.
@@ -13,7 +13,7 @@
 
 local Harness = {}
 
-Harness.VERSION = "1.2"
+Harness.VERSION = "1.3"
 
 Harness.total = 0
 Harness.passed = 0
@@ -26,7 +26,7 @@ Harness.failed = 0
 local function Log(message)
 
     print(
-        "[BAO][NavigationTestHarness V1.2] " ..
+        "[BAO][NavigationTestHarness V1.3] " ..
         tostring(message)
     )
 
@@ -197,7 +197,7 @@ local function RunTests()
         GetNavigation()
 
     Log("========================================")
-    Log("Navigation Test Harness V1.2")
+    Log("Navigation Test Harness V1.3")
     Log("========================================")
 
     --------------------------------------------------------
@@ -225,7 +225,7 @@ local function RunTests()
     AssertEqual(
         "NavigationSystem version",
         Navigation.VERSION,
-        "1.2"
+        "1.3"
     )
 
     --------------------------------------------------------
@@ -874,5 +874,5 @@ BAO.NavigationTestHarness =
     Harness
 
 Log(
-    "Navigation Test Harness V1.2 loaded"
+    "Navigation Test Harness V1.3 loaded"
 )

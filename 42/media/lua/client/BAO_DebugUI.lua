@@ -1,7 +1,7 @@
 ---------------------------------------------------------
 -- Bandits AI Overhaul
 -- BAO_DebugUI.lua
--- V1.8
+-- V1.9
 --
 -- BAO Developer Debug UI
 --
@@ -145,7 +145,7 @@ function BAODebugWindow:createChildren()
             titleBar + 65,
             180,
             30,
-            "TEST BUTTON",
+            "PIPELINE TESTS",
             self,
             BAODebugWindow.onTestButton
         )
@@ -430,21 +430,24 @@ end
 ---------------------------------------------------------
 
 function BAODebugWindow:onTestButton()
-
-    print(
-        "[BAO][DebugUI] TEST BUTTON PRESSED"
-    )
-
-    self.lastScenario = "UI_TEST"
-
-    self.lastDecision = "UI_OK"
-
+    self.lastScenario = "PIPELINE"
+    self.lastDecision = "NONE"
     self.lastScore = 0
-
     self.lastPriority = 0
-
-    self.lastTestStatus = "SUCCESS"
-
+    local harness = BAO.AIControllerTestHarness
+    if not harness or not harness.Run or not harness.GetSummary then
+        self.lastTestStatus = "HARNESS UNAVAILABLE"
+        return
+    end
+    local ok, success = pcall(harness.Run)
+    if not ok then
+        print("[BAO][DebugUI] Pipeline error: " .. tostring(success))
+        self.lastTestStatus = "ERROR"
+        return
+    end
+    local summary = harness.GetSummary()
+    self.lastDecision = tostring(summary.Passed) .. "/" .. tostring(summary.Total) .. " PASSED"
+    self.lastTestStatus = success and "PASS" or "FAIL"
 end
 
 ---------------------------------------------------------
@@ -691,7 +694,7 @@ function BAO.DebugUI.Create()
         )
 
     print(
-        "[BAO][DebugUI] Creating V1.8 window at "
+        "[BAO][DebugUI] Creating V1.9 window at "
         .. tostring(x)
         .. ", "
         .. tostring(y)
@@ -854,5 +857,5 @@ end
 ---------------------------------------------------------
 
 print(
-    "[BAO][DebugUI] V1.8 loaded"
+    "[BAO][DebugUI] V1.9 loaded"
 )
