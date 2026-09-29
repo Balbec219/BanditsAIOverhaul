@@ -1,21 +1,16 @@
 ---------------------------------------------------------
 -- Bandits AI Overhaul
 -- BAO_AITestHarness.lua
--- V1.0
+-- V1.1
 --
--- Purpose:
--- Automated testing of BAO Decision System
+-- Automated Decision System scenario testing.
 --
--- Scenarios:
--- NORMAL
--- LOW_HEALTH
--- HIGH_FATIGUE
--- MANY_ZOMBIES
--- NIGHT
--- NO_WEAPON
--- HUNGRY
--- THIRSTY
--- PANIC
+-- IMPORTANT:
+-- DecisionSystem uses WorldContext values in the 0-100
+-- range for Health/Hunger/Thirst/Fatigue/Panic/Pain.
+--
+-- Test calculations use CalculateWithContext() and do
+-- NOT modify the live DecisionSystem runtime state.
 ---------------------------------------------------------
 
 BAO = BAO or {}
@@ -24,195 +19,222 @@ BAO.AITestHarness = BAO.AITestHarness or {}
 local Harness = BAO.AITestHarness
 
 ---------------------------------------------------------
--- Configuration
+-- CONFIG
 ---------------------------------------------------------
 
-Harness.Version = "V1.0"
+Harness.Version = "V1.1"
 
 Harness.Enabled = true
 
 Harness.LogPrefix = "[BAO][AI Test Harness]"
 
 ---------------------------------------------------------
--- Scenario definitions
+-- SCENARIOS
 ---------------------------------------------------------
 
 Harness.Scenarios = {
 
     NORMAL = {
-        name = "NORMAL",
 
-        world = {
-            threatLevel = 0,
-            zombieCount = 0,
-            isNight = false,
-        },
+        Name = "NORMAL",
 
-        player = {
-            health = 1.0,
-            fatigue = 0.0,
-            hunger = 0.0,
-            thirst = 0.0,
-            panic = 0.0,
-            hasWeapon = true,
-        },
+        WorldContext = {
+
+            Health = 100,
+            Hunger = 0,
+            Thirst = 0,
+            Fatigue = 0,
+            Panic = 0,
+            Pain = 0,
+
+            ZombiesNearby = 0,
+
+            Night = false,
+
+            HasWeapon = true,
+            Ranged = false
+        }
     },
 
     LOW_HEALTH = {
-        name = "LOW_HEALTH",
 
-        world = {
-            threatLevel = 0,
-            zombieCount = 0,
-            isNight = false,
-        },
+        Name = "LOW_HEALTH",
 
-        player = {
-            health = 0.25,
-            fatigue = 0.0,
-            hunger = 0.0,
-            thirst = 0.0,
-            panic = 0.0,
-            hasWeapon = true,
-        },
+        WorldContext = {
+
+            Health = 25,
+            Hunger = 0,
+            Thirst = 0,
+            Fatigue = 0,
+            Panic = 0,
+            Pain = 20,
+
+            ZombiesNearby = 0,
+
+            Night = false,
+
+            HasWeapon = true,
+            Ranged = false
+        }
     },
 
     HIGH_FATIGUE = {
-        name = "HIGH_FATIGUE",
 
-        world = {
-            threatLevel = 0,
-            zombieCount = 0,
-            isNight = false,
-        },
+        Name = "HIGH_FATIGUE",
 
-        player = {
-            health = 1.0,
-            fatigue = 0.90,
-            hunger = 0.0,
-            thirst = 0.0,
-            panic = 0.0,
-            hasWeapon = true,
-        },
+        WorldContext = {
+
+            Health = 100,
+            Hunger = 0,
+            Thirst = 0,
+            Fatigue = 90,
+            Panic = 0,
+            Pain = 0,
+
+            ZombiesNearby = 0,
+
+            Night = false,
+
+            HasWeapon = true,
+            Ranged = false
+        }
     },
 
     MANY_ZOMBIES = {
-        name = "MANY_ZOMBIES",
 
-        world = {
-            threatLevel = 1.0,
-            zombieCount = 30,
-            isNight = false,
-        },
+        Name = "MANY_ZOMBIES",
 
-        player = {
-            health = 1.0,
-            fatigue = 0.0,
-            hunger = 0.0,
-            thirst = 0.0,
-            panic = 0.0,
-            hasWeapon = true,
-        },
+        WorldContext = {
+
+            Health = 100,
+            Hunger = 0,
+            Thirst = 0,
+            Fatigue = 0,
+            Panic = 0,
+            Pain = 0,
+
+            ZombiesNearby = 30,
+
+            Night = false,
+
+            HasWeapon = true,
+            Ranged = false
+        }
     },
 
     NIGHT = {
-        name = "NIGHT",
 
-        world = {
-            threatLevel = 0,
-            zombieCount = 0,
-            isNight = true,
-        },
+        Name = "NIGHT",
 
-        player = {
-            health = 1.0,
-            fatigue = 0.0,
-            hunger = 0.0,
-            thirst = 0.0,
-            panic = 0.0,
-            hasWeapon = true,
-        },
+        WorldContext = {
+
+            Health = 100,
+            Hunger = 0,
+            Thirst = 0,
+            Fatigue = 0,
+            Panic = 0,
+            Pain = 0,
+
+            ZombiesNearby = 0,
+
+            Night = true,
+
+            HasWeapon = true,
+            Ranged = false
+        }
     },
 
     NO_WEAPON = {
-        name = "NO_WEAPON",
 
-        world = {
-            threatLevel = 0,
-            zombieCount = 0,
-            isNight = false,
-        },
+        Name = "NO_WEAPON",
 
-        player = {
-            health = 1.0,
-            fatigue = 0.0,
-            hunger = 0.0,
-            thirst = 0.0,
-            panic = 0.0,
-            hasWeapon = false,
-        },
+        WorldContext = {
+
+            Health = 100,
+            Hunger = 0,
+            Thirst = 0,
+            Fatigue = 0,
+            Panic = 0,
+            Pain = 0,
+
+            ZombiesNearby = 0,
+
+            Night = false,
+
+            HasWeapon = false,
+            Ranged = false
+        }
     },
 
     HUNGRY = {
-        name = "HUNGRY",
 
-        world = {
-            threatLevel = 0,
-            zombieCount = 0,
-            isNight = false,
-        },
+        Name = "HUNGRY",
 
-        player = {
-            health = 1.0,
-            fatigue = 0.0,
-            hunger = 0.90,
-            thirst = 0.0,
-            panic = 0.0,
-            hasWeapon = true,
-        },
+        WorldContext = {
+
+            Health = 100,
+            Hunger = 90,
+            Thirst = 0,
+            Fatigue = 0,
+            Panic = 0,
+            Pain = 0,
+
+            ZombiesNearby = 0,
+
+            Night = false,
+
+            HasWeapon = true,
+            Ranged = false
+        }
     },
 
     THIRSTY = {
-        name = "THIRSTY",
 
-        world = {
-            threatLevel = 0,
-            zombieCount = 0,
-            isNight = false,
-        },
+        Name = "THIRSTY",
 
-        player = {
-            health = 1.0,
-            fatigue = 0.0,
-            hunger = 0.0,
-            thirst = 0.90,
-            panic = 0.0,
-            hasWeapon = true,
-        },
+        WorldContext = {
+
+            Health = 100,
+            Hunger = 0,
+            Thirst = 90,
+            Fatigue = 0,
+            Panic = 0,
+            Pain = 0,
+
+            ZombiesNearby = 0,
+
+            Night = false,
+
+            HasWeapon = true,
+            Ranged = false
+        }
     },
 
     PANIC = {
-        name = "PANIC",
 
-        world = {
-            threatLevel = 1.0,
-            zombieCount = 10,
-            isNight = false,
-        },
+        Name = "PANIC",
 
-        player = {
-            health = 1.0,
-            fatigue = 0.0,
-            hunger = 0.0,
-            thirst = 0.0,
-            panic = 1.0,
-            hasWeapon = true,
-        },
-    },
+        WorldContext = {
+
+            Health = 100,
+            Hunger = 0,
+            Thirst = 0,
+            Fatigue = 0,
+            Panic = 100,
+            Pain = 0,
+
+            ZombiesNearby = 10,
+
+            Night = false,
+
+            HasWeapon = true,
+            Ranged = false
+        }
+    }
 }
 
 ---------------------------------------------------------
--- Ordered scenario list
+-- ORDER
 ---------------------------------------------------------
 
 Harness.ScenarioOrder = {
@@ -225,12 +247,11 @@ Harness.ScenarioOrder = {
     "NO_WEAPON",
     "HUNGRY",
     "THIRSTY",
-    "PANIC",
-
+    "PANIC"
 }
 
 ---------------------------------------------------------
--- Utility
+-- LOG
 ---------------------------------------------------------
 
 local function Log(message)
@@ -244,168 +265,228 @@ local function Log(message)
 end
 
 ---------------------------------------------------------
--- Print scenario
+-- FORMAT NUMBER
 ---------------------------------------------------------
 
-function Harness.PrintScenario(scenario)
+local function FormatNumber(value)
 
-    if not scenario then
-
-        Log("ERROR: scenario is nil")
-
-        return
-
+    if type(value) ~= "number" then
+        return tostring(value)
     end
 
-    Log("----------------------------------------")
-
-    Log(
-        "Scenario: "
-        .. tostring(scenario.name)
-    )
-
-    Log(
-        "Health: "
-        .. tostring(scenario.player.health)
-    )
-
-    Log(
-        "Fatigue: "
-        .. tostring(scenario.player.fatigue)
-    )
-
-    Log(
-        "Hunger: "
-        .. tostring(scenario.player.hunger)
-    )
-
-    Log(
-        "Thirst: "
-        .. tostring(scenario.player.thirst)
-    )
-
-    Log(
-        "Panic: "
-        .. tostring(scenario.player.panic)
-    )
-
-    Log(
-        "Weapon: "
-        .. tostring(scenario.player.hasWeapon)
-    )
-
-    Log(
-        "Zombies: "
-        .. tostring(scenario.world.zombieCount)
-    )
-
-    Log(
-        "Threat: "
-        .. tostring(scenario.world.threatLevel)
-    )
-
-    Log(
-        "Night: "
-        .. tostring(scenario.world.isNight)
-    )
+    return string.format("%.2f", value)
 
 end
 
 ---------------------------------------------------------
--- Run one scenario
+-- CHECK DECISION SYSTEM
+---------------------------------------------------------
+
+function Harness.IsDecisionSystemReady()
+
+    if not BAO.DecisionSystem then
+
+        return false
+    end
+
+    if not BAO.DecisionSystem.CalculateWithContext then
+
+        return false
+    end
+
+    return true
+
+end
+
+---------------------------------------------------------
+-- GET SCENARIO
+---------------------------------------------------------
+
+function Harness.GetScenario(name)
+
+    return Harness.Scenarios[name]
+
+end
+
+---------------------------------------------------------
+-- RUN ONE SCENARIO
 ---------------------------------------------------------
 
 function Harness.RunScenario(name)
 
     local scenario =
-        Harness.Scenarios[name]
+        Harness.GetScenario(name)
 
     if not scenario then
 
         Log(
-            "ERROR: unknown scenario: "
+            "ERROR: Unknown scenario: "
             .. tostring(name)
         )
 
         return nil
-
     end
 
     Log("")
     Log("========================================")
-    Log("RUNNING SCENARIO: " .. tostring(name))
+    Log(
+        "SCENARIO: "
+        .. tostring(scenario.Name)
+    )
     Log("========================================")
 
-    Harness.PrintScenario(scenario)
-
-    -----------------------------------------------------
-    -- DecisionSystem integration
-    -----------------------------------------------------
-
-    if BAO.DecisionSystem
-        and BAO.DecisionSystem.CalculateWithContext then
+    if not Harness.IsDecisionSystemReady() then
 
         Log(
-            "Calling DecisionSystem.CalculateWithContext()"
+            "ERROR: DecisionSystem.CalculateWithContext() unavailable"
         )
 
-        local result =
-            BAO.DecisionSystem.CalculateWithContext(
-                scenario
-            )
+        return nil
+    end
 
-        if result then
+    local context =
+        scenario.WorldContext
+
+    Log(
+        "Health="
+        .. tostring(context.Health)
+        .. " Hunger="
+        .. tostring(context.Hunger)
+        .. " Thirst="
+        .. tostring(context.Thirst)
+    )
+
+    Log(
+        "Fatigue="
+        .. tostring(context.Fatigue)
+        .. " Panic="
+        .. tostring(context.Panic)
+        .. " Pain="
+        .. tostring(context.Pain)
+    )
+
+    Log(
+        "Zombies="
+        .. tostring(context.ZombiesNearby)
+        .. " Night="
+        .. tostring(context.Night)
+        .. " Weapon="
+        .. tostring(context.HasWeapon)
+    )
+
+    -----------------------------------------------------
+    -- TEST CALCULATION
+    -----------------------------------------------------
+
+    local result =
+        BAO.DecisionSystem.CalculateWithContext(
+            context
+        )
+
+    if not result then
+
+        Log(
+            "FAIL: DecisionSystem returned nil"
+        )
+
+        return nil
+    end
+
+    if not result.Decision then
+
+        Log(
+            "FAIL: Result has no Decision"
+        )
+
+        return nil
+    end
+
+    -----------------------------------------------------
+    -- RESULT
+    -----------------------------------------------------
+
+    local decision =
+        result.Decision
+
+    Log("")
+    Log("RESULT")
+    Log(
+        "Decision="
+        .. tostring(decision.ID)
+    )
+
+    Log(
+        "Score="
+        .. FormatNumber(decision.Score)
+    )
+
+    Log(
+        "Priority="
+        .. tostring(decision.Priority)
+    )
+
+    -----------------------------------------------------
+    -- SCORE TABLE
+    -----------------------------------------------------
+
+    if result.Scores then
+
+        Log("")
+        Log("SCORES")
+
+        for decisionName, score
+            in pairs(result.Scores) do
 
             Log(
-                "Decision: "
-                .. tostring(result.decision)
-            )
-
-            Log(
-                "Score: "
-                .. tostring(result.score)
-            )
-
-            Log(
-                "Priority: "
-                .. tostring(result.priority)
-            )
-
-            return result
-
-        else
-
-            Log(
-                "DecisionSystem returned nil"
+                tostring(decisionName)
+                .. "="
+                .. FormatNumber(score)
             )
 
         end
 
-    else
-
-        Log(
-            "DecisionSystem.CalculateWithContext() not available"
-        )
-
     end
 
-    return nil
+    -----------------------------------------------------
+    -- RETURN STRUCTURED RESULT
+    -----------------------------------------------------
+
+    return {
+
+        Scenario = scenario.Name,
+
+        Decision = decision.ID,
+
+        Score = decision.Score,
+
+        Priority = decision.Priority,
+
+        Scores = result.Scores,
+
+        WorldContext = result.WorldContext
+    }
 
 end
 
 ---------------------------------------------------------
--- Run all scenarios
+-- RUN ALL
 ---------------------------------------------------------
 
 function Harness.RunAll()
 
     Log("")
     Log("########################################")
-    Log("BAO AI TEST HARNESS " .. Harness.Version)
-    Log("STARTING FULL TEST")
+    Log(
+        "BAO AI TEST HARNESS "
+        .. Harness.Version
+    )
+    Log("FULL SCENARIO TEST")
     Log("########################################")
 
     local results = {}
+
+    local passed = 0
+    local failed = 0
 
     for _, scenarioName
         in ipairs(Harness.ScenarioOrder) do
@@ -417,95 +498,106 @@ function Harness.RunAll()
 
         results[scenarioName] = result
 
+        if result then
+
+            passed = passed + 1
+
+        else
+
+            failed = failed + 1
+
+        end
+
     end
 
     Log("")
     Log("########################################")
-    Log("BAO AI TEST HARNESS COMPLETE")
+    Log("TEST COMPLETE")
+    Log(
+        "PASSED="
+        .. tostring(passed)
+    )
+
+    Log(
+        "FAILED="
+        .. tostring(failed)
+    )
+
     Log("########################################")
 
-    return results
+    return {
+
+        Results = results,
+
+        Passed = passed,
+
+        Failed = failed,
+
+        Total = passed + failed
+    }
 
 end
 
 ---------------------------------------------------------
--- Simple public API
+-- INDIVIDUAL TEST API
 ---------------------------------------------------------
 
 function Harness.TestNormal()
 
-    return Harness.RunScenario(
-        "NORMAL"
-    )
+    return Harness.RunScenario("NORMAL")
 
 end
 
 function Harness.TestLowHealth()
 
-    return Harness.RunScenario(
-        "LOW_HEALTH"
-    )
+    return Harness.RunScenario("LOW_HEALTH")
 
 end
 
 function Harness.TestHighFatigue()
 
-    return Harness.RunScenario(
-        "HIGH_FATIGUE"
-    )
+    return Harness.RunScenario("HIGH_FATIGUE")
 
 end
 
 function Harness.TestManyZombies()
 
-    return Harness.RunScenario(
-        "MANY_ZOMBIES"
-    )
+    return Harness.RunScenario("MANY_ZOMBIES")
 
 end
 
 function Harness.TestNight()
 
-    return Harness.RunScenario(
-        "NIGHT"
-    )
+    return Harness.RunScenario("NIGHT")
 
 end
 
 function Harness.TestNoWeapon()
 
-    return Harness.RunScenario(
-        "NO_WEAPON"
-    )
+    return Harness.RunScenario("NO_WEAPON")
 
 end
 
 function Harness.TestHungry()
 
-    return Harness.RunScenario(
-        "HUNGRY"
-    )
+    return Harness.RunScenario("HUNGRY")
 
 end
 
 function Harness.TestThirsty()
 
-    return Harness.RunScenario(
-        "THIRSTY"
-    )
+    return Harness.RunScenario("THIRSTY")
 
 end
 
 function Harness.TestPanic()
 
-    return Harness.RunScenario(
-        "PANIC"
-    )
+    return Harness.RunScenario("PANIC")
 
 end
 
 ---------------------------------------------------------
--- Loaded
+-- LOADED
 ---------------------------------------------------------
 
 Log(
