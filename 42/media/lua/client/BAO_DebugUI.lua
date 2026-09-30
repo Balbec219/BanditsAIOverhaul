@@ -160,6 +160,15 @@ function BAODebugWindow:createChildren()
     -- AI TEST BUTTONS
     -----------------------------------------------------
 
+    self.spawnNPCButton = ISButtonClass:new(20, titleBar + 270, 175, 26,
+        "SPAWN TEST NPC", self, BAODebugWindow.onSpawnNPC)
+    self.spawnNPCButton:initialise()
+    self:addChild(self.spawnNPCButton)
+    self.removeNPCButton = ISButtonClass:new(215, titleBar + 270, 175, 26,
+        "REMOVE TEST NPC", self, BAODebugWindow.onRemoveNPC)
+    self.removeNPCButton:initialise()
+    self:addChild(self.removeNPCButton)
+
     local startY =
         titleBar + 105
 
@@ -429,6 +438,23 @@ end
 -- BASIC TEST
 ---------------------------------------------------------
 
+function BAODebugWindow:runNPCCommand(spawn)
+    self.lastScenario = spawn and "NPC SPAWN" or "NPC REMOVE"
+    self.lastScore, self.lastPriority = 0, 0
+    local adapter = BAO.NPCWorldAdapter
+    if not adapter then self.lastTestStatus = "UNAVAILABLE"; return end
+    local ok, success, reason = pcall(function()
+        if BAO.NPCWorldClient then return BAO.NPCWorldClient.Request(spawn, _G.getPlayer and getPlayer()) end
+        return false, "client_module_unavailable"
+    end)
+    self.lastDecision = tostring(ok and reason or success)
+    self.lastTestStatus = ok and (success and "OK" or "REFUSED") or "ERROR"
+    print("[BAO][DebugUI] " .. self.lastScenario .. " " .. self.lastTestStatus
+        .. " reason=" .. self.lastDecision)
+end
+function BAODebugWindow:onSpawnNPC() self:runNPCCommand(true) end
+function BAODebugWindow:onRemoveNPC() self:runNPCCommand(false) end
+
 function BAODebugWindow:onTestButton()
     self.lastScenario = "PIPELINE"
     self.lastDecision = "NONE"
@@ -681,7 +707,7 @@ function BAO.DebugUI.Create()
 
     local width = 410
 
-    local height = 390
+    local height = 430
 
     local x =
         math.floor(

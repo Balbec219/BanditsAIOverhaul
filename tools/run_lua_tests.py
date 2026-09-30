@@ -32,10 +32,11 @@ print(f"Lua 5.1 syntax: {len(lua_files)} files PASS")
 
 for relative in (
     "navigation/BAO_NavigationSystem.lua",
+    "npc/BAO_NPCData.lua", "npc/BAO_NPCRuntime.lua", "npc/BAO_NPCWorldAdapter.lua",
     "ai/BAO_ActionSystem.lua", "ai/BAO_ActionExecutor.lua", "ai/BAO_AIController.lua",
     "tests/BAO_ActionTestHarness.lua", "tests/BAO_ActionExecutorTestHarness.lua",
     "tests/BAO_AIControllerTestHarness.lua",
-    "tests/BAO_NavigationTestHarness.lua",
+    "tests/BAO_NavigationTestHarness.lua", "tests/BAO_NPCRuntimeTestHarness.lua",
 ):
     path = shared / relative
     runtime.execute(path.read_text(encoding="utf-8-sig"), name=str(path))
@@ -46,6 +47,7 @@ assert(BAO.ActionTestHarness.failed == 0, 'Action regression suite failed')
 assert(BAO.ActionExecutorTestHarness.fail == 0, 'Executor regression suite failed')
 assert(BAO.AIControllerTestHarness.GetSummary().Success, 'Pipeline suite failed')
 assert(BAO.NavigationTestHarness.failed == 0, 'Navigation suite failed')
+assert(BAO.NPCRuntimeTestHarness.GetSummary().Success, 'NPC Runtime suite failed')
 
 BAO.DecisionSystem = { GetCurrentDecision = function()
     return { ID = 'patrol', Score = 60, Priority = 50 }
@@ -178,8 +180,54 @@ BAOTestWindow.onTestButton(window)
 assert(window.lastTestStatus == 'ERROR')
 BAO.AIControllerTestHarness = savedHarness
 """)
+runtime.execute((root / "tools/test_npc_world_adapter.lua").read_text(encoding="utf-8-sig"))
+runtime.execute("""
+local vanillaCalls = 0
+ISSpawnHordeUI = {
+    createChildren = function(self)
+        self.outfit = { addOptionWithData = function() end }
+    end,
+    onSpawn = function() vanillaCalls = vanillaCalls + 1 end
+}
+package.preload['DebugUIs/ISSpawnHordeUI'] = function() end
+package.preload['ISUI/ISModalDialog'] = function() end
+ISModalDialog = { new = function() return {
+    initialise = function() end, addToUIManager = function() end
+} end }
+baoVanillaCalls = function() return vanillaCalls end
+""")
+runtime.execute((root / "42/media/lua/client/BAO_NPCWorldClient.lua").read_text(encoding="utf-8-sig"))
+runtime.execute((root / "42/media/lua/client/BAO_HordeManager.lua").read_text(encoding="utf-8-sig"))
+runtime.execute("""
+local window = { getOutfit = function() return 'Police' end }
+ISSpawnHordeUI.onSpawn(window)
+assert(baoVanillaCalls() == 1)
+window.getOutfit = function() return '__BAO_TEST_NPC__' end
+window.getZombiesNumber = function() return 1 end
+window.getHeightOffset = function() return 0 end
+window.chr = {}
+local sent = 0
+sendClientCommand = function(_, module, command) assert(module == 'BAO_Debug' and command == 'world_spawn'); sent = sent + 1 end
+isClient = function() return true end
+ISSpawnHordeUI.onSpawn(window)
+assert(baoVanillaCalls() == 1 and sent == 1, 'BAO request did not use own server command')
+isClient = function() return false end
+local called
+BAO.NPCWorldAdapter.SpawnTestNPC = function(_, target) called = target; return true, 'spawned' end
+window.getZombiesNumber = function() return 1 end
+window.getHeightOffset = function() return 0 end
+window.selectX, window.selectY, window.selectZ = 10, 20, 1
+ISSpawnHordeUI.onSpawn(window)
+assert(called.x == 10 and called.y == 20 and called.z == 1)
+assert(baoVanillaCalls() == 1)
+""")
+runtime.execute((root / "42/media/lua/server/BAO_DebugServer.lua").read_text(encoding="utf-8-sig"))
+runtime.execute((root / "tools/test_npc_server.lua").read_text(encoding="utf-8-sig"))
+print("Server authority, admin gate, target validation, snapshot, client identity/cleanup: PASS")
+print("Horde Manager: vanilla delegation, network request and selected tile: PASS")
+print("NPC world adapter: spawn, duplicate, blocked square, MP refusal, cleanup retry, busy route: PASS")
 for line in messages:
-    if "PIPELINE V" in line or "STATUS:" in line or "FAIL:" in line:
+    if "PIPELINE V" in line or "NPC RUNTIME V" in line or "STATUS:" in line or "FAIL:" in line:
         print(line)
 print("Live-state restoration, repeat run and exception restoration: PASS")
 print("Pipeline UI handler: PASS / FAIL / unavailable / exception: PASS (no rendering)")

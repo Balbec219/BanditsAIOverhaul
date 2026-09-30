@@ -131,6 +131,20 @@ BAO.Log("ERROR: Cannot remove missing NPC: " .. tostring(npcId))
 return false
 end
 
+-- World objects are transient and live in NPCRuntime. Release that binding first
+-- so deleting persistent data cannot leave an orphaned runtime reference.
+if BAO.NPCRuntime and BAO.NPCRuntime.IsBound
+and BAO.NPCRuntime.IsBound(npcId) then
+BAO.NPCRuntime.Unbind(npcId, nil, "npc_data_removed")
+end
+
+-- World objects are transient and live in NPCRuntime. Release that binding first
+-- so deleting persistent data cannot leave an orphaned runtime reference.
+if BAO.NPCRuntime and BAO.NPCRuntime.IsBound
+and BAO.NPCRuntime.IsBound(npcId) then
+BAO.NPCRuntime.Unbind(npcId, nil, "npc_data_removed")
+end
+
 BAO.NPCData[npcId] = nil
 
 BAO.Log("NPC data removed: " .. tostring(npcId))
