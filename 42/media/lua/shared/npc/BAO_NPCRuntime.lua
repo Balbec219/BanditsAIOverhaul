@@ -1,11 +1,11 @@
 -- BanditsAIOverhaul NPC Runtime V1.0.
 -- Keeps transient world objects separate from persistent NPCData records.
 -- This module has no OnTick work and never spawns or removes a world character.
-local Runtime = { VERSION = "1.0" }
+local Runtime = { VERSION = "1.1", UpdateInterval = 0.1 }
 
 local function NewState()
     return {
-        bindings = {},
+        bindings = {}, aiElapsed = 0,
         order = {},
         nextGeneration = 1,
         statistics = { bound = 0, unbound = 0, rejected = 0, refreshes = 0 }
@@ -110,6 +110,13 @@ function Runtime.Unbind(npcId, expectedCharacter, reason)
         return false, "character_mismatch"
     end
 
+    if binding.ai then
+        local stopped = binding.ai.AIController.StopCurrentAction(reason or "unbound")
+        if not stopped then return false, "npc_ai_busy" end
+        if not binding.ai.NavigationSystem.Reset() then return false, "npc_navigation_busy" end
+        binding.ai = nil
+    end
+
     Runtime.state.bindings[npcId] = nil
     for index, boundId in ipairs(Runtime.state.order) do
         if boundId == npcId then
@@ -200,6 +207,13 @@ end
 
 function Runtime.Reset()
     for _, npcId in ipairs(Runtime.state.order) do
+        local binding = Runtime.state.bindings[npcId]
+        if binding and binding.ai then
+            if not binding.ai.AIController.StopCurrentAction("runtime_reset") then return false end
+            if not binding.ai.NavigationSystem.Reset() then return false end
+        end
+    end
+    for _, npcId in ipairs(Runtime.state.order) do
         local npc = NPCRecord(npcId)
         if npc then npc.isActive = false end
     end
@@ -207,6 +221,69 @@ function Runtime.Reset()
     return true
 end
 
+-- Explicit per-NPC input: never reads the player's global DecisionSystem.
+function Runtime.EnsureAI(npcId)
+    if _G["isClient"] and isClient() then return false, "server_authority_required" end
+    local binding = Runtime.Get(npcId)
+    if not binding or not binding.active then return false, "npc_not_active" end
+    if binding.ai then return true, binding.ai end
+    local names = { "ActionSystem", "NavigationSystem", "ActionExecutor", "AIController" }
+    for _, name in ipairs(names) do
+        if not BAO[name] or not BAO[name].CreateInstance then return false, "dependencies_missing" end
+    end
+    local context = { InstancePrefix = npcId .. ":" .. binding.generation .. ":", InstanceLog = function() end }
+    context.DecisionSystem = { GetCurrentDecision = function() return context.decision end }
+    for _, name in ipairs(names) do BAO[name].CreateInstance(context) end
+    context.NavigationSystem.Initialize()
+    if not context.AIController.Initialize() then return false, "initialization_failed" end
+    binding.ai = context
+    return true, context
+end
+
+function Runtime.StartPatrol(npcId, x, y, z, options)
+    local ok, context = Runtime.EnsureAI(npcId)
+    if not ok then return false, context end
+    local binding = Runtime.Get(npcId)
+    local set, reason = context.AIController.SetPatrolTarget(binding.character, x, y, z, options)
+    if not set then return false, reason end
+    context.decision = { ID = "patrol", Score = 60, Priority = 50 }
+    -- Same decision after completion requires an explicit retry in the existing controller.
+    if context.AIController.GetCurrentDecision() then
+        return context.AIController.RestartCurrentDecision()
+    end
+    return context.AIController.Update()
+end
+
+function Runtime.StopAI(npcId, reason)
+    local binding = Runtime.Get(npcId)
+    if not binding or not binding.ai then return true end
+    local context = binding.ai
+    if not context.AIController.StopCurrentAction(reason or "npc_stop") then return false end
+    if not context.NavigationSystem.Reset() then return false end
+    context.decision = nil
+    return true
+end
+
+function Runtime.UpdateAI(delta)
+    if _G["isClient"] and isClient() then return end
+    delta = delta or (_G["getGameTime"] and getGameTime():getRealworldSecondsSinceLastUpdate()) or (1 / 60)
+    if not Number(delta) or delta <= 0 then return end
+    Runtime.state.aiElapsed = Runtime.state.aiElapsed + math.min(delta, 0.25)
+    if Runtime.state.aiElapsed < Runtime.UpdateInterval then return end
+    local elapsed = Runtime.state.aiElapsed
+    Runtime.state.aiElapsed = 0
+    for _, npcId in ipairs(Runtime.state.order) do
+        local binding = Runtime.state.bindings[npcId]
+        local context = binding and binding.ai
+        if context and binding.active and context.decision then
+            context.NavigationSystem.Update(elapsed)
+            context.ActionExecutor.Update()
+            context.AIController.Update()
+        end
+    end
+end
+
+if Events and Events.OnTick then Events.OnTick.Add(function() Runtime.UpdateAI() end) end
 BAO = BAO or {}
 BAO.NPCRuntime = Runtime
-Log("NPC Runtime V1.0 loaded")
+Log("NPC Runtime V1.1 loaded")

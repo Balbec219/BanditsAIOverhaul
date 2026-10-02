@@ -1,3 +1,6 @@
+-- Each instance closes over its own dependencies and state; default instance keeps legacy events.
+local function CreateInstance(BAO, Events)
+local print = BAO.InstanceLog or print
 -----------------------------------------------------------
 -- BAO_ActionSystem.lua
 -- BanditsAIOverhaul
@@ -72,7 +75,7 @@ end
 -----------------------------------------------------------
 
 local function GenerateActionId()
-    local id = "bao_action_" .. tostring(ActionSystem.nextActionId)
+    local id = (BAO.InstancePrefix or "") .. "bao_action_" .. tostring(ActionSystem.nextActionId)
 
     ActionSystem.nextActionId =
         ActionSystem.nextActionId + 1
@@ -929,3 +932,10 @@ Log(
     "BAO_ActionSystem.lua loaded - " ..
     ActionSystem.Version
 )
+
+ActionSystem.CreateInstance = function(context) return CreateInstance(context, nil) end
+return ActionSystem
+end
+
+BAO = BAO or {}
+CreateInstance(BAO, Events)

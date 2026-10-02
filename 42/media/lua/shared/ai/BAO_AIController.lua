@@ -1,3 +1,6 @@
+-- Each instance closes over its own dependencies and state; default instance keeps legacy events.
+local function CreateInstance(BAO, Events)
+local print = BAO.InstanceLog or print
 -----------------------------------------------------------
 -- BanditsAIOverhaul
 -- BAO_AIController.lua
@@ -186,7 +189,7 @@ local statistics = {
 -- so that later this can become one controller per NPC.
 -----------------------------------------------------------
 
-local controllerId = "bao_ai_controller_001"
+local controllerId = (BAO.InstancePrefix or "") .. "bao_ai_controller_001"
 
 -----------------------------------------------------------
 -- UTILITY
@@ -1306,3 +1309,10 @@ Log(
     AIController.Version ..
     " module loaded"
 )
+
+AIController.CreateInstance = function(context) return CreateInstance(context, nil) end
+return AIController
+end
+
+BAO = BAO or {}
+CreateInstance(BAO, Events)

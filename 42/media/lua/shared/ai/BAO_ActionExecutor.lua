@@ -1,3 +1,6 @@
+-- Each instance closes over its own dependencies and state; default instance keeps legacy events.
+local function CreateInstance(BAO, Events)
+local print = BAO.InstanceLog or print
 -- ============================================================
 -- BanditsAIOverhaul
 -- BAO_ActionExecutor.lua
@@ -130,7 +133,7 @@ local function GetCurrentTime()
 end
 
 local function GenerateExecutionId()
-    local id = "bao_execution_" .. tostring(ActionExecutor.nextExecutionId)
+    local id = (BAO.InstancePrefix or "") .. "bao_execution_" .. tostring(ActionExecutor.nextExecutionId)
 
     ActionExecutor.nextExecutionId =
         ActionExecutor.nextExecutionId + 1
@@ -854,3 +857,10 @@ Log(
     .. ActionExecutor.VERSION
     .. " module loaded"
 )
+
+ActionExecutor.CreateInstance = function(context) return CreateInstance(context, nil) end
+return ActionExecutor
+end
+
+BAO = BAO or {}
+CreateInstance(BAO, Events)

@@ -1,3 +1,6 @@
+-- Each instance closes over its own dependencies and state; default instance keeps legacy events.
+local function CreateInstance(BAO, Events)
+local print = BAO.InstanceLog or print
 -- BanditsAIOverhaul Navigation V1.3: request once, observe engine-owned movement.
 -- Never calls PathFindBehavior2:update() or changes character coordinates.
 local NavigationSystem = { VERSION = "1.3", PollInterval = 0.1 }
@@ -68,7 +71,7 @@ function NavigationSystem.CreateRequest(character, target, metadata)
     local runtime = NavigationSystem.runtime
     -- Own a target snapshot; external edits must not change the requested path.
     local request = {
-        id = "bao_navigation_" .. tostring(runtime.nextNavigationId), character = character,
+        id = (BAO.InstancePrefix or "") .. "bao_navigation_" .. tostring(runtime.nextNavigationId), character = character,
         target = { type = target.type, x = target.x, y = target.y, z = target.z, character = target.character },
         metadata = metadata, state = "REQUESTED", result = "WORKING", createdAt = Now(),
         elapsed = 0, idleElapsed = 0, timeoutSeconds = timeout, stuckSeconds = stuckTimeout,
@@ -280,3 +283,10 @@ if Events and Events.OnTick then Events.OnTick.Add(NavigationSystem.OnTick) end
 BAO = BAO or {}
 BAO.NavigationSystem = NavigationSystem
 Log("NavigationSystem V1.3 loaded")
+
+NavigationSystem.CreateInstance = function(context) return CreateInstance(context, nil) end
+return NavigationSystem
+end
+
+BAO = BAO or {}
+CreateInstance(BAO, Events)

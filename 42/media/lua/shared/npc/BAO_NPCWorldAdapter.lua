@@ -18,9 +18,13 @@ function Adapter.GetSnapshot()
     return list
 end
 local function Release(entry, reason)
-    BAO.NPCRuntime.Unbind(entry.id, entry.character, reason)
+    if BAO.NPCRuntime.IsBound(entry.id) then
+        local ok = BAO.NPCRuntime.Unbind(entry.id, entry.character, reason)
+        if not ok then return false end
+    end
     if entry.data and BAO.NPCData.Get(entry.id) == entry.data then BAO.NPCData.Remove(entry.id) end
     Adapter.byCharacter[entry.character], Adapter.entries[entry.id] = nil, nil
+    return true
 end
 function Adapter.ReleaseDeadNPC(character)
     if _G["isClient"] and isClient() then return false end
@@ -32,7 +36,7 @@ function Adapter.ReleaseDeadNPC(character)
     if navigation and navigation.character == character then
         if not BAO.NavigationSystem.Cancel("npc_died", navigation) then return false end
     end
-    Release(entry, "npc_died")
+    if not Release(entry, "npc_died") then return false end
     if _G["isServer"] and isServer() and _G["sendServerCommand"] then
         sendServerCommand("BAO_Debug", "world_status", { success = true, reason = "npc_died",
             snapshot = true, active = Adapter.GetSnapshot() })
@@ -45,13 +49,14 @@ local function RemoveEntry(entry)
     if binding and binding.character ~= entry.character then return false, "binding_changed" end
     local navigation = BAO.NavigationSystem and BAO.NavigationSystem.GetCurrentNavigation()
     if navigation and navigation.character == entry.character then return false, "npc_navigation_busy" end
+    if not BAO.NPCRuntime.StopAI(entry.id, "test_removed") then return false, "npc_ai_busy" end
     local identity = Identity(entry)
     local ok = pcall(function()
         if not entry.worldRemoved then entry.character:removeFromWorld(); entry.worldRemoved = true end
         entry.character:removeFromSquare()
     end)
     if not ok then entry.cleanupPending = true; return false, "cleanup_pending" end
-    Release(entry, "test_removed")
+    if not Release(entry, "test_removed") then return false, "npc_ai_busy" end
     return true, identity
 end
 function Adapter.RemoveTestNPC()
