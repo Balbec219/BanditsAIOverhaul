@@ -1,0 +1,11 @@
+{
+    "runtime.version": "Lua 5.1",
+    "workspace.checkThirdParty": false,
+    "workspace.ignoreDir": [".git", "tools", "docs"],
+    "diagnostics.globals": [
+        "BAO", "Events", "getPlayer", "ISSpawnHordeUI", "ISModalDialog",
+        "sendClientCommand", "sendServerCommand", "getTimestampMs", "ZombRand",
+        "getCell", "isClient", "isServer", "addZombiesInOutfit", "getGameTime",
+        "instanceof"
+    ]
+}

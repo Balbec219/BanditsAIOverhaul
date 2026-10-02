@@ -1,0 +1,6 @@
+{
+    "workshopRoot": "C:\\Users\\Vovan\\Zomboid\\Workshop\\BanditsAIOverhaul",
+    "modFolder": "BanditsAIOverhaul",
+    "include": ["42", "common"],
+    "description": "Copy the complete runtime mod into Contents/mods; preserve Workshop metadata."
+}

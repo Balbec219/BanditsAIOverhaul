@@ -1,167 +1,140 @@
--- BanditsAIOverhaul NPC World Adapter V0.3: server-owned networked test shell.
-local Adapter = { VERSION = "0.3", lastProbe = nil, owned = nil }
-
-local function Log(message)
-    print("[BAO][NPCWorldAdapter] " .. tostring(message))
-end
-
-local function HasMethod(owner, method)
-    if owner == nil then return false end
-    local ok, value = pcall(function() return owner[method] end)
-    return ok and value ~= nil
-end
-
-function Adapter.Probe()
-    local report = {
-        survivorFactory = _G.SurvivorFactory ~= nil,
-        createSurvivor = HasMethod(_G.SurvivorFactory, "CreateSurvivor"),
-        instantiateInCell = HasMethod(_G.SurvivorFactory, "InstansiateInCell"),
-        isoSurvivor = _G.IsoSurvivor ~= nil,
-        isoSurvivorNew = HasMethod(_G.IsoSurvivor, "new"),
-        getCell = type(_G.getCell) == "function",
-        zombieFactory = _G.addZombiesInOutfit ~= nil
-    }
-    report.ready = report.zombieFactory and report.getCell
-    Adapter.lastProbe = report
-    Log("API probe ready=" .. tostring(report.ready)
-        .. " zombieFactory=" .. tostring(report.zombieFactory)
-        .. " factory=" .. tostring(report.survivorFactory)
-        .. " create=" .. tostring(report.createSurvivor)
-        .. " instantiate=" .. tostring(report.instantiateInCell)
-        .. " IsoSurvivor.new=" .. tostring(report.isoSurvivorNew)
-        .. " getCell=" .. tostring(report.getCell))
-    return report
-end
-
-function Adapter.GetLastProbe()
-    return Adapter.lastProbe
-end
-
+-- Server-owned test bodies; AI remains in Decision/Action/Executor/Navigation.
 BAO = BAO or {}
+local Adapter = { VERSION = "0.4", entries = {}, byCharacter = {}, nextId = 1, MaxBatch = 20, MaxActive = 50 }
 BAO.NPCWorldAdapter = Adapter
-
--- One experimental test shell per server. Keep ownership if cleanup fails.
-local testId = "bao_world_test_001"
+local function Log(message) print("[BAO][NPCWorldAdapter] " .. tostring(message)) end
+local function Number(n) return type(n) == "number" and n == n and math.abs(n) ~= math.huge end
+function Adapter.Count()
+    local n = 0
+    for _ in pairs(Adapter.entries) do n = n + 1 end
+    return n
+end
+local function Identity(entry)
+    return { id = entry.id, online = entry.character:getOnlineID(), outfit = entry.character:getPersistentOutfitID() }
+end
+function Adapter.GetSnapshot()
+    local list = {}
+    for _, entry in pairs(Adapter.entries) do list[#list + 1] = Identity(entry) end
+    return list
+end
+local function Release(entry, reason)
+    BAO.NPCRuntime.Unbind(entry.id, entry.character, reason)
+    if entry.data and BAO.NPCData.Get(entry.id) == entry.data then BAO.NPCData.Remove(entry.id) end
+    Adapter.byCharacter[entry.character], Adapter.entries[entry.id] = nil, nil
+end
 function Adapter.ReleaseDeadNPC(character)
-    if _G.isClient and isClient() then return false end
-    local entry = Adapter.owned
-    if not entry or entry.character ~= character then return false end
-    local binding = BAO.NPCRuntime.Get(testId)
+    if _G["isClient"] and isClient() then return false end
+    local entry = Adapter.byCharacter[character]
+    if not entry then return false end
+    local binding = BAO.NPCRuntime.Get(entry.id)
     if binding and binding.character ~= character then return false end
     local navigation = BAO.NavigationSystem and BAO.NavigationSystem.GetCurrentNavigation()
     if navigation and navigation.character == character then
         if not BAO.NavigationSystem.Cancel("npc_died", navigation) then return false end
     end
-    -- Death/corpse conversion belongs to the engine: release only BAO bookkeeping.
-    BAO.NPCRuntime.Unbind(testId, character, "npc_died")
-    if entry.createdData and BAO.NPCData.Get(testId) == entry.data then
-        entry.data.isAlive = false
-        entry.data.state = "dead"
-        BAO.NPCData.Remove(testId)
+    Release(entry, "npc_died")
+    if _G["isServer"] and isServer() and _G["sendServerCommand"] then
+        sendServerCommand("BAO_Debug", "world_status", { success = true, reason = "npc_died",
+            snapshot = true, active = Adapter.GetSnapshot() })
     end
-    Adapter.owned = nil
-    Log("Test NPC died; spawn slot released")
-    if _G.isServer and isServer() and _G.sendServerCommand then
-        sendServerCommand("BAO_Debug", "world_status", {
-            success = true, reason = "npc_died", snapshot = true
-        })
-    end
+    Log("Death released " .. entry.id)
     return true
 end
-
-function Adapter.RemoveTestNPC()
-    local entry = Adapter.owned
-    if not entry then return false, "no_test_npc" end
-    local binding = BAO.NPCRuntime.Get(testId)
+local function RemoveEntry(entry)
+    local binding = BAO.NPCRuntime.Get(entry.id)
     if binding and binding.character ~= entry.character then return false, "binding_changed" end
     local navigation = BAO.NavigationSystem and BAO.NavigationSystem.GetCurrentNavigation()
-    if navigation and navigation.character == entry.character then
-        return false, "npc_navigation_busy"
-    end
-    local ok, reason = pcall(function()
-        if not entry.worldRemoved then
-            entry.character:removeFromWorld()
-            entry.worldRemoved = true
-        end
+    if navigation and navigation.character == entry.character then return false, "npc_navigation_busy" end
+    local identity = Identity(entry)
+    local ok = pcall(function()
+        if not entry.worldRemoved then entry.character:removeFromWorld(); entry.worldRemoved = true end
         entry.character:removeFromSquare()
     end)
-    if not ok then
-        Log("Cleanup pending: " .. tostring(reason))
-        return false, "cleanup_pending"
-    end
-    BAO.NPCRuntime.Unbind(testId, entry.character, "test_removed")
-    if entry.createdData and BAO.NPCData.Get(testId) == entry.data then BAO.NPCData.Remove(testId) end
-    Adapter.owned = nil
-    Log("Test NPC removed")
-    return true, "removed"
+    if not ok then entry.cleanupPending = true; return false, "cleanup_pending" end
+    Release(entry, "test_removed")
+    return true, identity
 end
-
+function Adapter.RemoveTestNPC()
+    if _G["isClient"] and isClient() then return false, "server_authority_required", {} end
+    local pending, removed, failed = {}, {}, false
+    for _, entry in pairs(Adapter.entries) do pending[#pending + 1] = entry end
+    if #pending == 0 then return false, "no_test_npc", removed end
+    for _, entry in ipairs(pending) do
+        local ok, identity = RemoveEntry(entry)
+        if ok then removed[#removed + 1] = identity else failed = true end
+    end
+    return not failed, failed and "partial_cleanup" or "removed", removed
+end
 function Adapter.SpawnTestNPC(player, target)
-    if _G.isClient and isClient() then
-        return false, "server_authority_required"
+    if _G["isClient"] and isClient() then return false, "server_authority_required", 0 end
+    if not player or not BAO.NPCRuntime or not BAO.NPCData then return false, "dependencies_missing", 0 end
+    target = target or {}
+    local count, radius = target.count or 1, target.radius or 0
+    if not Number(count) or count % 1 ~= 0 or count < 1 or count > Adapter.MaxBatch
+        or not Number(radius) or radius % 1 ~= 0 or radius < 0 or radius > 10 then
+        return false, "invalid_count_or_radius", 0
     end
-    -- Fallback if the server missed the death event; no polling or world scan.
-    if Adapter.owned then
-        local actor = Adapter.owned.character
-        if actor.isDead and actor:isDead() then Adapter.ReleaseDeadNPC(actor) end
+    local x, y, z = target.x, target.y, target.z
+    if x == nil and y == nil and z == nil then
+        x, y, z = math.floor(player:getX()) + 2, math.floor(player:getY()), math.floor(player:getZ())
     end
-    if Adapter.owned then return false, "test_npc_exists" end
-    if not player or not BAO.NPCRuntime or not BAO.NPCData then return false, "dependencies_missing" end
-    if BAO.NPCData.Exists(testId) then return false, "test_id_in_use" end
-    if not _G.addZombiesInOutfit then return false, "factory_unavailable" end
+    if not Number(x) or not Number(y) or not Number(z) then return false, "invalid_target", 0 end
+    x, y, z = math.floor(x), math.floor(y), math.floor(z)
+    local dead = {}
+    for character, entry in pairs(Adapter.byCharacter) do
+        if entry.cleanupPending then return false, "cleanup_pending", 0 end
+        if character:isDead() then dead[#dead + 1] = character end
+    end
+    for _, character in ipairs(dead) do Adapter.ReleaseDeadNPC(character) end
+    if Adapter.Count() + count > Adapter.MaxActive then return false, "active_limit_50", 0 end
+    if not _G["addZombiesInOutfit"] or not _G["getCell"] then return false, "factory_unavailable", 0 end
     local cell = getCell()
-    if not cell then return false, "cell_unavailable" end
-    local x, y, z = math.floor(player:getX()), math.floor(player:getY()), math.floor(player:getZ())
-    if target then
-        for _, key in ipairs({ "x", "y", "z" }) do
-            local value = target[key]
-            if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
-                return false, "invalid_target"
+    if not cell then return false, "cell_unavailable", 0 end
+    local spawned, failure = 0, nil
+    for _ = 1, count do
+        local sx = x + (radius > 0 and ZombRand(-radius, radius + 1) or 0)
+        local sy = y + (radius > 0 and ZombRand(-radius, radius + 1) or 0)
+        local square = cell:getGridSquare(sx, sy, z)
+        -- Horde Manager allows several bodies on one tile; do not reject occupancy.
+        if not square or not square:TreatAsSolidFloor() then failure = "square_unavailable"; break end
+        local entry
+        local ok, reason = pcall(function()
+            local list = addZombiesInOutfit(sx, sy, z, 1, nil, 0,
+                false, false, false, false, false, false, 1)
+            if not list or list:size() == 0 then return "spawn_failed" end
+            local actor = list:get(0)
+            local id
+            repeat
+                id = "bao_world_test_" .. tostring(Adapter.nextId)
+                Adapter.nextId = Adapter.nextId + 1
+            until not BAO.NPCData.Exists(id)
+            entry = { id = id, character = actor }
+            Adapter.entries[id], Adapter.byCharacter[actor] = entry, entry
+            actor:setUseless(true)
+            actor:setTarget(nil)
+            actor:setVariable("BAOHuman", true)
+            actor:getModData().BAOTestShell = id
+            entry.data = BAO.NPCData.Create(id, "BAO Test NPC")
+            if not entry.data then return "data_creation_failed" end
+            if not BAO.NPCRuntime.Bind(id, actor, { source = "debug_factory", ownedByBAO = true }) then
+                return "binding_failed"
             end
-        end
-        x, y, z = math.floor(target.x), math.floor(target.y), math.floor(target.z)
-    end
-    local square
-    -- Bounded search, once per button click. Never runs on a tick.
-    local offsets = { {2,0}, {-2,0}, {0,2}, {0,-2}, {2,2}, {-2,-2}, {2,-2}, {-2,2} }
-    if target then offsets = { {0,0} } end
-    for _, offset in ipairs(offsets) do
-        local candidate = cell:getGridSquare(x + offset[1], y + offset[2], z)
-        if candidate and candidate:isFree(false) and candidate:TreatAsSolidFloor() then
-            square = candidate
+        end)
+        if not ok or reason then
+            failure = ok and reason or "spawn_exception"
+            if entry then RemoveEntry(entry) end
             break
         end
+        spawned = spawned + 1
     end
-    if not square then return false, "no_free_square" end
-    local character
-    local ok, reason = pcall(function()
-        -- Vanilla B42 API, also used by Bandits' B42 compatibility adapter.
-        local list = addZombiesInOutfit(square:getX(), square:getY(), square:getZ(),
-            1, nil, 0, false, false, false, false, true, false, 1)
-        if list and list:size() > 0 then
-            character = list:get(0)
-            Adapter.owned = { character = character, createdData = false }
-            character:setUseless(true)
-            character:setTarget(nil)
-            character:getModData().BAOTestShell = true
-        end
-    end)
-    if not character then
-        Log("Spawn failed: " .. tostring(reason))
-        return false, "spawn_failed"
-    end
-    Adapter.owned = { character = character, createdData = false }
-    if not ok then Adapter.RemoveTestNPC(); return false, "spawn_failed" end
-    local npc = BAO.NPCData.Create(testId, "BAO Test NPC")
-    if not npc then Adapter.RemoveTestNPC(); return false, "data_creation_failed" end
-    Adapter.owned.createdData = true
-    Adapter.owned.data = npc
-    local bound = BAO.NPCRuntime.Bind(testId, character, { source = "debug_factory", ownedByBAO = true })
-    if not bound then Adapter.RemoveTestNPC(); return false, "binding_failed" end
-    Log("Test NPC spawned id=" .. testId .. " x=" .. tostring(character:getX())
-        .. " y=" .. tostring(character:getY()) .. " z=" .. tostring(character:getZ()))
-    return true, "spawned"
+    Log("Batch spawned=" .. spawned .. " requested=" .. count .. " active=" .. Adapter.Count())
+    return failure == nil, failure or "spawned", spawned
 end
+function Adapter.Probe()
+    Adapter.lastProbe = { ready = _G["addZombiesInOutfit"] ~= nil and _G["getCell"] ~= nil }
+    Log("V0.4 factory ready=" .. tostring(Adapter.lastProbe.ready))
+    return Adapter.lastProbe
+end
+function Adapter.GetLastProbe() return Adapter.lastProbe end
 if Events and Events.OnGameStart then Events.OnGameStart.Add(Adapter.Probe) end
 if Events and Events.OnZombieDead then Events.OnZombieDead.Add(Adapter.ReleaseDeadNPC) end
-Log("NPC World Adapter V0.3 loaded (server-owned zombie shell)")

@@ -1,9 +1,46 @@
 # Память проекта BAO / BAIO
 
-Обновлено: 2026-09-30. Это файловая память для следующих сессий, а не гарантия
+Обновлено: 2026-10-02. Это файловая память для следующих сессий, а не гарантия
 автоматического запоминания вне этого проекта.
 
 ## Актуальное продолжение: NPC Runtime V1.0
+
+### 2026-10-02 — выбор подтверждён, batch V0.4 и первая анимация
+
+Пользователь ВЫБРАЛ подход Slayer: IsoZombie допустим, человеческие анимации обязательны.
+Вопрос о полном запрете IsoZombie закрыт. Главное: решения/поведение должны соответствовать
+собственной логике BAO, а не vanilla zombie AI или скопированным системам чужих модов.
+Запись новых движений сейчас не нужна; используется существующий игровой Bob_Idle.
+
+WorldAdapter V0.4: entries/byCharacter вместо owned, уникальные npcId, партии 1–20,
+до 50 активных тестовых объектов; повторный спавн на той же клетке разрешён. Проверяются
+загрузка клетки и пол, проверки занятости персонажами нет (как vanilla Horde Manager).
+Радиус 0–10 внутренних клеток, интерфейс vanilla показывает 1–11. Частичный спавн
+возвращает фактическое spawned; при неудаче сохранены ранее созданные объекты.
+Смерть освобождает отдельную запись; REMOVE ALL удаляет только все тестовые записи BAO,
+при busy path/cleanup failure сохраняет неудалённые. Сохранять трупы при смерти.
+NPC не получают искусственную неуязвимость при создании.
+
+DebugServer теперь отправляет массивы active/removed, передаёт count/radius, удалён
+обнаруженный недостижимый дубликат world-command блока. Клиент хранит карту по onlineID,
+проверяет persistentOutfitID только у кандидата; не строит строки/не сканирует мир на tick.
+Удалённые идентичности имеют срок 60 секунд. Новый активный ID перекрывает старое удаление.
+Смена сетевого протокола требует одновременного перезапуска сервера и клиентов.
+
+Добавлен 42/media/AnimSets/zombie/idle/baoHumanIdle.xml: Bob_Idle при BAOHuman=true.
+Переменная ставится своим объектам сервером/клиентом; это ТОЛЬКО idle, не полный набор
+человеческих анимаций. Ходьба, оружие, реакции/смерть ещё не реализованы и не проверены.
+Обычные XML игры не изменялись. Пользовательское удаление 42/media/AnimSets/JOPA не трогать.
+
+Офлайн batch lifecycle, права/сеть/UI и старые suites проходят (37 Lua; pipeline 66/66).
+Реальный массовый спавн/удаление/idle в игре ещё НЕ проверены. Следующий тест: после
+перезапуска сервер+клиент создать 5, затем ещё 3 на одной клетке (радиус UI=1), убить
+одного, снова создать, удалить всех. Проверить idle и обычных зомби рядом.
+Подробности docs/NPC_BATCH_V0_4.md. Следующий AI этап: независимые состояния конвейера
+для каждого NPC; Controller/Executor/Navigation всё ещё singleton, партия не означает
+автономное поведение всей группы. Не связывать всех NPC с одним текущим действием.
+
+Ниже исторические записи; ожидавшийся выбор IsoZombie уже сделан выше.
 
 Новое требование: массовый спавн с выбором количества, включая одну клетку, как vanilla
 Horde Manager. Проверен установленный ISSpawnHordeUI.lua: цикл 1..count, случайные XY
@@ -315,3 +352,16 @@ Lua-код и установленная копия не менялись. Иг�
 Следующий пользовательский шаг: базовый запуск F10 → RUN ALL TESTS в тестовом мире;
 рассматривать результат как smoke-проверку UI/расчётов. После запуска можно читать
 `C:\Users\Vovan\Zomboid\console.txt` напрямую для анализа свежих ошибок.
+
+## 2026-10-02 — VS Code diagnostics and Workshop save-copy
+
+- Added .luarc.json (Lua 5.1, engine globals); excluded offline tools from workspace inference so mock signatures do not constrain game API calls. Intentional mock globals have a file-local lowercase-global annotation.
+- Optional engine API probes use _G["name"] consistently; runtime semantics unchanged. The four user-reported game files have no diagnostics in the headless LuaLS check. Full workspace still reports 57 other diagnostics in six existing controller/navigation/harness files; these are not claimed fixed.
+- settings2.json configures the local Workshop destination. .vscode/settings.json uses the installed emeraldwalk.runonsave extension to run tools/Sync-Workshop.ps1 on saving an existing file (Ctrl+S). settings2.json alone is not a VS Code settings file.
+- Copies runtime directories 42/common into Workshop/BanditsAIOverhaul/Contents/mods/BanditsAIOverhaul; preserves workshop.txt and preview, removes only stale manifest-owned files, rejects links/out-of-root paths, serializes concurrent copies. No Steam upload. Initial preview is the game's ModTemplate placeholder.
+- Verified: offline Lua 5.1 runner and all existing suites PASS; repeat deployment 39 files, source/destination hash mismatches 0. Actual VS Code keystroke and in-game run not tested in this step.
+
+### 2026-10-02 — официальное превью пользователя
+Корневой preview.png — предоставленный пользователем логотип BAIO (800×800), преобразованный из JPEG в PNG без изменения композиции. Sync-Workshop.ps1 при каждом сохранении копирует его в Workshop/BanditsAIOverhaul/preview.png с заменой старого превью. Это заменяет прежнее правило сохранения превью и заглушку ModTemplate; workshop.txt и Steam ID по-прежнему сохраняются.
+
+2026-10-02: По уточнению пользователя preview.png уменьшен до 256×256 (PNG, качественное бикубическое масштабирование, без обрезки/изменения стиля). Копия Workshop обновлена; размер и совпадение файлов проверены. Это актуальный размер вместо прежних 800×800.

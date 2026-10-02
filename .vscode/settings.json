@@ -1,5 +1,13 @@
 {
-    "Lua.diagnostics.globals": [
-        "Events"
-    ]
+    "emeraldwalk.runonsave": {
+        "commands": [
+            {
+                "match": ".*",
+                "cmd": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"${workspaceFolder}\\tools\\Sync-Workshop.ps1\"",
+                "isAsync": false,
+                "autoShowOutputPanel": "error",
+                "message": "BAO: copying saved mod to Workshop..."
+            }
+        ]
+    }
 }

@@ -620,97 +620,48 @@ function DebugServer.OnClientCommand(
 
     args = args or {}
 
-    -- Authorize all debug mutations on the server, including legacy commands.
-    if command ~= "world_state" and player:getAccessLevel() ~= "admin"
-        and (_G.isServer and isServer()) then
-        sendServerCommand(player, DebugServer.MODULE, "world_status", { success = false, reason = "admin_required" })
+    -- All world mutation is server-authorized; state requests are read-only.
+    local function Reply(result, broadcast)
+        if broadcast then sendServerCommand(DebugServer.MODULE, "world_status", result)
+        else sendServerCommand(player, DebugServer.MODULE, "world_status", result) end
+    end
+    if command ~= "world_state" and (_G["isServer"] and isServer())
+        and player:getAccessLevel() ~= "admin" then
+        Reply({ success = false, reason = "admin_required" })
         return
     end
-    if command == "world_spawn" or command == "world_remove" or command == "world_state"
-        or command == "spawn_npc" or command == "destroy_npc" then
+    if command == "world_spawn" or command == "spawn_npc" or command == "world_remove"
+        or command == "destroy_npc" or command == "world_state" then
         local adapter = BAO.NPCWorldAdapter
-        if not adapter then return end
-        local success, reason = true, "state"
-        local removed
+        if not adapter then Reply({success=false, reason="adapter_unavailable"}); return end
+        local success, reason, spawned, removed = true, "state", 0, {}
         if command == "world_spawn" or command == "spawn_npc" then
-            local target
+            local target = { count = args.count, radius = args.radius }
             if args.x ~= nil or args.y ~= nil or args.z ~= nil then
                 for _, key in ipairs({"x", "y", "z"}) do
                     local value = args[key]
-                    if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then return end
+                    if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
+                        Reply({success=false, reason="invalid_target"}); return
+                    end
                 end
                 if math.abs(args.x - player:getX()) > 50 or math.abs(args.y - player:getY()) > 50
-                    or math.floor(args.z) ~= math.floor(player:getZ()) then return end
-                target = { x = args.x, y = args.y, z = args.z }
-            end
-            local callOK
-            callOK, success, reason = pcall(adapter.SpawnTestNPC, player, target)
-            if not callOK then
-                print("[BAO][DebugServer] spawn exception: " .. tostring(success))
-                success, reason = false, "spawn_exception"
-            end
-        elseif command ~= "world_state" then
-            local entry = adapter.owned
-            if entry then removed = { online = entry.character:getOnlineID(),
-                outfit = entry.character:getPersistentOutfitID() } end
-            local callOK
-            callOK, success, reason = pcall(adapter.RemoveTestNPC)
-            if not callOK then success, reason = false, "cleanup_exception" end
-            if not success then removed = nil end
-        end
-        local result = { success = success, reason = reason, removed = removed, snapshot = true }
-        if adapter.owned then
-            result.active = { online = adapter.owned.character:getOnlineID(),
-                outfit = adapter.owned.character:getPersistentOutfitID() }
-        end
-        if command == "world_state" then
-            sendServerCommand(player, DebugServer.MODULE, "world_status", result)
-        else
-            sendServerCommand(DebugServer.MODULE, "world_status", result)
-        end
-        print("[BAO][DebugServer] " .. command .. " success=" .. tostring(success) .. " reason=" .. tostring(reason))
-        return
-    end
-
-    -- Authorize all debug mutations on the server, including legacy commands.
-    if command ~= "world_state" and player:getAccessLevel() ~= "admin"
-        and (_G.isServer and isServer()) then return end
-    if command == "world_spawn" or command == "world_remove" or command == "world_state"
-        or command == "spawn_npc" or command == "destroy_npc" then
-        local adapter = BAO.NPCWorldAdapter
-        if not adapter then return end
-        local success, reason = true, "state"
-        local removed
-        if command == "world_spawn" or command == "spawn_npc" then
-            local target
-            if args.x ~= nil or args.y ~= nil or args.z ~= nil then
-                for _, key in ipairs({"x", "y", "z"}) do
-                    local value = args[key]
-                    if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then return end
+                    or math.floor(args.z) ~= math.floor(player:getZ()) then
+                    Reply({success=false, reason="target_too_far"}); return
                 end
-                if math.abs(args.x - player:getX()) > 50 or math.abs(args.y - player:getY()) > 50
-                    or math.floor(args.z) ~= math.floor(player:getZ()) then return end
-                target = { x = args.x, y = args.y, z = args.z }
+                target.x, target.y, target.z = args.x, args.y, args.z
             end
-            success, reason = adapter.SpawnTestNPC(player, target)
+            local ok
+            ok, success, reason, spawned = pcall(adapter.SpawnTestNPC, player, target)
+            if not ok then success, reason, spawned = false, "spawn_exception", 0 end
         elseif command ~= "world_state" then
-            local entry = adapter.owned
-            if entry then removed = { online = entry.character:getOnlineID(),
-                outfit = entry.character:getPersistentOutfitID() } end
-            success, reason = adapter.RemoveTestNPC()
-            if not success then removed = nil end
+            local ok
+            ok, success, reason, removed = pcall(adapter.RemoveTestNPC)
+            if not ok then success, reason, removed = false, "cleanup_exception", {} end
         end
-        local result = { success = success, reason = reason, removed = removed }
-        if adapter.owned then
-            result.active = { online = adapter.owned.character:getOnlineID(),
-                outfit = adapter.owned.character:getPersistentOutfitID() }
-        end
-        if command == "world_state" then
-            sendServerCommand(player, DebugServer.MODULE, "world_status", result)
-        else
-            sendServerCommand(DebugServer.MODULE, "world_status", result)
-        end
-        print("[BAO][DebugServer] " .. command .. " success=" .. tostring(success) .. " reason=" .. tostring(reason))
+        Reply({ success = success, reason = reason, spawned = spawned, removed = removed,
+            snapshot = true, active = adapter.GetSnapshot() }, command ~= "world_state")
+        print("[BAO][DebugServer] " .. command .. " success=" .. tostring(success)
+            .. " reason=" .. tostring(reason) .. " spawned=" .. tostring(spawned))
         return
     end
 

@@ -1,84 +1,84 @@
--- Offline only: engine doubles and fault injection. Never loaded by PZ.
-local adapter = BAO.NPCWorldAdapter
+-- Offline: real BAO adapter/runtime, synthetic engine objects.
+---@diagnostic disable: lowercase-global
+-- Intentional engine-global replacements in this isolated offline Lua VM.
+local a = BAO.NPCWorldAdapter
 BAO.Log = function() end
-local count, worldRemoves, squareRemoves = 0, 0, 0
-local blocked, failRemoval = false, false
-local square = {
-    getX = function() return 12 end, getY = function() return 10 end,
-    getZ = function() return 0 end,
-    isFree = function() return not blocked end, TreatAsSolidFloor = function() return true end
-}
-getCell = function() return { getGridSquare = function() return square end } end
-isClient = function() return false end
 isServer = function() return false end
-local player = { getX = function() return 10 end, getY = function() return 10 end,
-    getZ = function() return 0 end }
-SurvivorFactory = {
-    CreateSurvivor = function() return {} end,
-    InstansiateInCell = function()
-        count = count + 1
-        return {
-            setUseless = function() end, setTarget = function() end,
-            getModData = function() return {} end,
-            getX = square.getX, getY = square.getY, getZ = square.getZ,
-            removeFromWorld = function() worldRemoves = worldRemoves + 1 end,
-            removeFromSquare = function()
-                if failRemoval then error('offline cleanup failure') end
-                squareRemoves = squareRemoves + 1
-            end
-        }
-    end
-}
-addZombiesInOutfit = function(...)
-    local actor = SurvivorFactory.InstansiateInCell(...)
-    return { size = function() return actor and 1 or 0 end, get = function() return actor end }
-end
-assert(adapter.SpawnTestNPC(player))
-assert(BAO.NPCRuntime.GetCharacter('bao_world_test_001') == adapter.owned.character)
-assert(not adapter.SpawnTestNPC(player) and count == 1)
-failRemoval = true
-assert(not adapter.RemoveTestNPC() and adapter.owned ~= nil)
-assert(not adapter.SpawnTestNPC(player) and count == 1)
-failRemoval = false
-assert(adapter.RemoveTestNPC())
-assert(worldRemoves == 1 and squareRemoves == 1)
-assert(not BAO.NPCData.Exists('bao_world_test_001') and adapter.owned == nil)
-assert(not adapter.RemoveTestNPC())
-blocked = true
-assert(not adapter.SpawnTestNPC(player) and count == 1)
-blocked = false
-isClient = function() return true end
-assert(not adapter.SpawnTestNPC(player) and count == 1)
 isClient = function() return false end
-assert(adapter.SpawnTestNPC(player))
-local character = adapter.owned.character
-local oldGet = BAO.NavigationSystem.GetCurrentNavigation
-BAO.NavigationSystem.GetCurrentNavigation = function() return { character = character } end
-assert(not adapter.RemoveTestNPC() and adapter.owned.character == character)
-BAO.NavigationSystem.GetCurrentNavigation = oldGet
-assert(adapter.RemoveTestNPC())
-assert(count == 2 and worldRemoves == 2 and squareRemoves == 2)
-local queried
-getCell = function() return { getGridSquare = function(_, x, y, z)
-    queried = {x,y,z}; return square
+local actors, calls, removed, floor, failAt = {}, 0, 0, true, nil
+local player = { getX=function() return 10 end, getY=function() return 10 end, getZ=function() return 0 end }
+local tiles = {}
+getCell = function() return { getGridSquare = function(_,x,y,z)
+    tiles[#tiles+1]={x,y,z}
+    return { TreatAsSolidFloor=function() return floor end,
+        isFree=function() return false end }
 end } end
-assert(adapter.SpawnTestNPC(player, { x=30, y=40, z=1 }))
-assert(queried[1] == 30 and queried[2] == 40 and queried[3] == 1)
-assert(adapter.RemoveTestNPC())
-assert(not adapter.SpawnTestNPC(player, { x=0/0, y=40, z=1 }))
-assert(adapter.SpawnTestNPC(player))
-local dead = adapter.owned.character
-local oldRemoves = worldRemoves
-assert(not adapter.ReleaseDeadNPC({}), 'Foreign death released owned actor')
-assert(adapter.ReleaseDeadNPC(dead))
-assert(adapter.owned == nil and worldRemoves == oldRemoves, 'Death removed corpse/world object')
-assert(not adapter.ReleaseDeadNPC(dead), 'Duplicate death processed')
-assert(adapter.SpawnTestNPC(player), 'Death did not release spawn slot')
-adapter.owned.character.isDead = function() return true end
-assert(adapter.SpawnTestNPC(player), 'Missed death event fallback failed')
-assert(worldRemoves == oldRemoves, 'Fallback removed corpse')
-assert(adapter.RemoveTestNPC())
-SurvivorFactory.InstansiateInCell = function() return nil end
-assert(not adapter.SpawnTestNPC(player) and adapter.owned == nil)
-assert(not BAO.NPCData.Exists('bao_world_test_001'))
-print('NPC world adapter lifecycle: PASS')
+addZombiesInOutfit = function(x,y,z)
+    calls = calls + 1
+    if calls == failAt then return {size=function() return 0 end} end
+    local actor = {dead=false, variables={}, data={}, world=0, square=0}
+    actor.isDead=function(self) return self.dead end
+    actor.getOnlineID=function() return calls end
+    local id = calls
+    actor.getOnlineID=function() return id end
+    actor.getPersistentOutfitID=function() return id+100 end
+    actor.getX=function() return x end; actor.getY=function() return y end; actor.getZ=function() return z end
+    actor.setVariable=function(self,k,v) self.variables[k]=v end
+    actor.setUseless=function() end; actor.setTarget=function() end
+    actor.getModData=function(self) return self.data end
+    actor.removeFromWorld=function(self) self.world=self.world+1; removed=removed+1 end
+    actor.removeFromSquare=function(self)
+        if self.fail then error('offline cleanup failure') end
+        self.square=self.square+1
+    end
+    actors[#actors+1]=actor
+    return {size=function() return 1 end, get=function() return actor end}
+end
+assert(a.SpawnTestNPC(player,{x=20,y=20,z=0,count=5}))
+assert(a.Count()==5 and #a.GetSnapshot()==5)
+assert(a.SpawnTestNPC(player,{x=20,y=20,z=0,count=3}))
+assert(a.Count()==8 and calls==8) -- occupied tile allowed, no lost old bindings
+for _,actor in ipairs(actors) do
+    assert(BAO.NPCRuntime.GetByCharacter(actor) and actor.variables.BAOHuman)
+end
+assert(not a.SpawnTestNPC(player,{count=21}) and calls==8)
+assert(not a.SpawnTestNPC(player,{count=0/0}) and calls==8)
+local navigationGet = BAO.NavigationSystem.GetCurrentNavigation
+BAO.NavigationSystem.GetCurrentNavigation = function() return {character=actors[1]} end
+local cleanupOK,cleanupReason = a.RemoveTestNPC()
+assert(not cleanupOK and cleanupReason=='partial_cleanup' and a.Count()==1)
+BAO.NavigationSystem.GetCurrentNavigation = navigationGet
+assert(a.RemoveTestNPC())
+actors = {}
+assert(a.SpawnTestNPC(player,{count=8}))
+local corpse=actors[1]; corpse.dead=true
+assert(a.ReleaseDeadNPC(corpse) and a.Count()==7 and corpse.world==0)
+assert(not a.ReleaseDeadNPC(corpse))
+actors[2].dead=true
+assert(a.SpawnTestNPC(player) and a.Count()==7 and actors[2].world==0)
+local before=calls
+floor=false
+assert(not a.SpawnTestNPC(player) and calls==before)
+floor=true
+failAt=calls+3
+local ok,reason,n=a.SpawnTestNPC(player,{count=5})
+assert(not ok and reason=='spawn_failed' and n==2 and a.Count()==9)
+failAt=nil
+local blocked=actors[#actors]
+blocked.fail=true
+local clean,why,ids=a.RemoveTestNPC()
+assert(not clean and why=='partial_cleanup' and #ids==8 and a.Count()==1)
+before=calls
+assert(not a.SpawnTestNPC(player) and calls==before)
+blocked.fail=false
+assert(a.RemoveTestNPC() and a.Count()==0 and blocked.world==1)
+assert(not a.RemoveTestNPC())
+assert(a.SpawnTestNPC(player,{count=20}))
+assert(a.SpawnTestNPC(player,{count=20}))
+assert(not a.SpawnTestNPC(player,{count=11}) and a.Count()==40)
+assert(a.SpawnTestNPC(player,{count=10}) and a.Count()==50)
+assert(a.RemoveTestNPC())
+isClient=function() return true end
+assert(not a.SpawnTestNPC(player) and not a.RemoveTestNPC())
+isClient=function() return false end
+print('Batch lifecycle: same tile, unique bindings, death, partial failure, cleanup retry, caps PASS')

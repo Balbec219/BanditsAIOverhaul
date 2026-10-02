@@ -14,8 +14,8 @@ if not UI.BAOIntegrationInstalled then
     end
     function UI:createChildren()
         createChildren(self)
-        self.outfit:addOptionWithData("BAO: создать тестовую NPC-оболочку", spawnKey)
-        self.outfit:addOptionWithData("BAO: удалить тестового NPC", removeKey)
+        self.outfit:addOptionWithData("BAO: создать NPC (1–20, всего до 50)", spawnKey)
+        self.outfit:addOptionWithData("BAO: удалить всех тестовых NPC", removeKey)
     end
     function UI:onSpawn()
         local selected = self:getOutfit()
@@ -25,11 +25,12 @@ if not UI.BAOIntegrationInstalled then
         local ok, success, reason = pcall(function()
             if not BAO.NPCWorldClient then return false, "client_module_unavailable" end
             if selected == removeKey then return BAO.NPCWorldClient.Request(false, self.chr) end
-            if self:getZombiesNumber() ~= 1 or self:getHeightOffset() ~= 0 then
-                return false, "use_count_1_height_0"
+            if self:getZombiesNumber() > 20 or self:getHeightOffset() ~= 0 then
+                return false, "use_count_20_height_0"
             end
             return BAO.NPCWorldClient.Request(true, self.chr,
-                { x = self.selectX, y = self.selectY, z = self.selectZ })
+                { x = self.selectX, y = self.selectY, z = self.selectZ,
+                    count = self:getZombiesNumber(), radius = self:getRadius() })
         end)
         if not ok then
             print("[BAO][HordeManager] " .. tostring(success))
@@ -39,7 +40,11 @@ if not UI.BAOIntegrationInstalled then
         local messages = {
             request_sent = "BAO: запрос отправлен серверу. Результат — в console.txt.",
             spawned = "BAO: фабрика вернула NPC. Проверь выбранную клетку.",
-            removed = "BAO: тестовый NPC удалён.",
+            removed = "BAO: тестовые NPC удалены.",
+            partial_cleanup = "BAO: часть NPC не удалена. Повтори удаление; подробности в логе.",
+            use_count_20_height_0 = "BAO: количество до 20, смещение высоты 0.",
+            invalid_count_or_radius = "BAO: количество 1–20, радиус в интерфейсе 1–11.",
+            active_limit_50 = "BAO: лимит 50 активных тестовых NPC.",
             test_npc_exists = "BAO: тестовый NPC уже создан. Сначала удали его.",
             no_test_npc = "BAO: созданного тестового NPC нет.",
             no_free_square = "BAO: клетка занята, не загружена или без пола.",

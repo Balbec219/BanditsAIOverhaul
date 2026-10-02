@@ -165,7 +165,7 @@ function BAODebugWindow:createChildren()
     self.spawnNPCButton:initialise()
     self:addChild(self.spawnNPCButton)
     self.removeNPCButton = ISButtonClass:new(215, titleBar + 270, 175, 26,
-        "REMOVE TEST NPC", self, BAODebugWindow.onRemoveNPC)
+        "REMOVE ALL TEST NPC", self, BAODebugWindow.onRemoveNPC)
     self.removeNPCButton:initialise()
     self:addChild(self.removeNPCButton)
 
@@ -444,7 +444,7 @@ function BAODebugWindow:runNPCCommand(spawn)
     local adapter = BAO.NPCWorldAdapter
     if not adapter then self.lastTestStatus = "UNAVAILABLE"; return end
     local ok, success, reason = pcall(function()
-        if BAO.NPCWorldClient then return BAO.NPCWorldClient.Request(spawn, _G.getPlayer and getPlayer()) end
+        if BAO.NPCWorldClient then return BAO.NPCWorldClient.Request(spawn, _G["getPlayer"] and getPlayer()) end
         return false, "client_module_unavailable"
     end)
     self.lastDecision = tostring(ok and reason or success)

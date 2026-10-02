@@ -20,7 +20,7 @@ end
 NavigationSystem.runtime = NewRuntime()
 local function Log(message) print("[BAO][NavigationSystem] " .. tostring(message)) end
 local function Now()
-    if _G.getTimestampMs then return _G.getTimestampMs() end
+    if _G["getTimestampMs"] then return _G["getTimestampMs"]() end
     return os.time() * 1000
 end
 local function Number(value)
@@ -150,8 +150,8 @@ function NavigationSystem.Start(navigation)
     if not navigation or navigation.state ~= "REQUESTED" or navigation._finished then return false, "invalid_request" end
     if runtime.currentNavigation then return false, "navigation_busy" end
     -- The player pathfinding lifecycle is a timed-action concern, not this NPC observer.
-    if type(navigation.character) == "userdata" and _G.instanceof
-        and _G.instanceof(navigation.character, "IsoPlayer") then
+    if type(navigation.character) == "userdata" and _G["instanceof"]
+        and _G["instanceof"](navigation.character, "IsoPlayer") then
         Finish(navigation, "FAILED", "player_navigation_not_supported")
         return false, navigation.reason
     end
@@ -267,7 +267,7 @@ function NavigationSystem.OnTick()
     local runtime = NavigationSystem.runtime
     if not runtime.currentNavigation then return end
     -- Vanilla B42.21 ISRestAction uses this game delta; paused time is not a timeout.
-    local delta = _G.getGameTime and _G.getGameTime():getRealworldSecondsSinceLastUpdate() or (1 / 60)
+    local delta = _G["getGameTime"] and _G["getGameTime"]():getRealworldSecondsSinceLastUpdate() or (1 / 60)
     if not Number(delta) or delta <= 0 then return end
     runtime.accumulated = runtime.accumulated + math.min(delta, 0.25)
     if runtime.accumulated < NavigationSystem.PollInterval then return end

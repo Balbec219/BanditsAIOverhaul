@@ -205,6 +205,7 @@ assert(baoVanillaCalls() == 1)
 window.getOutfit = function() return '__BAO_TEST_NPC__' end
 window.getZombiesNumber = function() return 1 end
 window.getHeightOffset = function() return 0 end
+window.getRadius = function() return 0 end
 window.chr = {}
 local sent = 0
 sendClientCommand = function(_, module, command) assert(module == 'BAO_Debug' and command == 'world_spawn'); sent = sent + 1 end
@@ -225,7 +226,7 @@ runtime.execute((root / "42/media/lua/server/BAO_DebugServer.lua").read_text(enc
 runtime.execute((root / "tools/test_npc_server.lua").read_text(encoding="utf-8-sig"))
 print("Server authority, admin gate, target validation, snapshot, client identity/cleanup: PASS")
 print("Horde Manager: vanilla delegation, network request and selected tile: PASS")
-print("NPC world adapter: spawn, duplicate, blocked square, MP refusal, cleanup retry, busy route: PASS")
+print("NPC world adapter: batches, same tile, IDs, death, partial failure, cleanup retry, busy route, caps: PASS")
 for line in messages:
     if "PIPELINE V" in line or "NPC RUNTIME V" in line or "STATUS:" in line or "FAIL:" in line:
         print(line)

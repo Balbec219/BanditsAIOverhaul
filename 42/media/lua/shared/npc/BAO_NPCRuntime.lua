@@ -26,8 +26,8 @@ end
 local function IsPlayer(character)
     if character == nil then return false end
     if type(character) == "table" and character.__baoTestPlayer == true then return true end
-    if type(character) ~= "userdata" or not _G.instanceof then return false end
-    local ok, result = pcall(_G.instanceof, character, "IsoPlayer")
+    if type(character) ~= "userdata" or not _G["instanceof"] then return false end
+    local ok, result = pcall(_G["instanceof"], character, "IsoPlayer")
     return ok and result == true
 end
 
