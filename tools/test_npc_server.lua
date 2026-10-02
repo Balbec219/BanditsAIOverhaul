@@ -1,6 +1,9 @@
 -- Offline authorization/routing tests, no real game objects.
 ---@diagnostic disable: lowercase-global
 -- Intentional engine-global replacements in this isolated offline Lua VM.
+-- Reproduce the game's missing next global throughout the network lifecycle.
+local savedNext = _G.next
+_G.next = nil
 local server, client = BAO.DebugServer, BAO.NPCWorldClient
 local creates, removes, replies = 0, 0, 0
 local last, chosen
@@ -55,3 +58,13 @@ actor.removeFromWorld = function() cleaned = cleaned + 1 end
 actor.removeFromSquare = function() cleaned = cleaned + 1 end
 client.OnZombieUpdate(actor)
 assert(cleaned == 2)
+
+-- Expiring the final cleanup notice must restore the cheap idle path.
+for _, notice in pairs(client.removed) do notice.expiry = 0 end
+client.OnZombieUpdate(actor)
+local other = { getOnlineID = function() return 124 end }
+client.OnZombieUpdate(other)
+assert(not client.hasEntries)
+client.OnServerCommand('BAO_Debug', 'world_status', { snapshot=true, active={}, removed={} })
+assert(not client.hasEntries and client.lastStatus.snapshot)
+_G.next = savedNext

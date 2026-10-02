@@ -12,6 +12,12 @@ function Client.Request(spawn, player, target)
     if spawn then return BAO.NPCWorldAdapter.SpawnTestNPC(player, target) end
     return BAO.NPCWorldAdapter.RemoveTestNPC()
 end
+-- Kahlua does not expose the standard Lua next() global.
+-- Stop at the first entry; only used on snapshots or tombstone expiry.
+local function HasEntries(entries)
+    for _ in pairs(entries) do return true end
+    return false
+end
 local function Key(identity) return identity.online end
 local function Now() return _G["getTimestampMs"] and getTimestampMs() / 1000 or os.time() end
 function Client.OnServerCommand(module, command, args)
@@ -27,7 +33,7 @@ function Client.OnServerCommand(module, command, args)
     end
     -- A currently active network identity takes precedence over old cleanup notices.
     for key in pairs(Client.active) do Client.removed[key] = nil end
-    Client.hasEntries = next(Client.active) ~= nil or next(Client.removed) ~= nil
+    Client.hasEntries = HasEntries(Client.active) or HasEntries(Client.removed)
     Client.lastStatus = args
     print("[BAO][NPCWorldClient] success=" .. tostring(args.success) .. " reason=" .. tostring(args.reason)
         .. " spawned=" .. tostring(args.spawned or 0))
@@ -45,7 +51,7 @@ function Client.OnZombieUpdate(zombie)
                 end
             else
                 Client.removed[key] = nil
-                Client.hasEntries = next(Client.active) ~= nil or next(Client.removed) ~= nil
+                Client.hasEntries = HasEntries(Client.active) or HasEntries(Client.removed)
             end
         end
         identity = Client.active[key]
