@@ -158,6 +158,7 @@ package.preload['ISUI/ISCollapsableWindow'] = function()
     ISCollapsableWindow = { derive = function() BAOTestWindow = {}; return BAOTestWindow end }
 end
 package.preload['ISUI/ISButton'] = function() ISButton = {} end
+package.preload['ISUI/ISComboBox'] = function() ISComboBox = {} end
 """)
 ui_path = root / "42/media/lua/client/BAO_DebugUI.lua"
 runtime.execute(ui_path.read_text(encoding="utf-8-sig"), name=str(ui_path))
@@ -180,6 +181,8 @@ BAOTestWindow.onTestButton(window)
 assert(window.lastTestStatus == 'ERROR')
 BAO.AIControllerTestHarness = savedHarness
 """)
+runtime.execute((root / "tools/test_npc_multi_ai.lua").read_text(encoding="utf-8-sig"))
+print("Two NPC pipelines: independent routes, deactivation, arrival, legacy state preserved: PASS")
 runtime.execute((root / "tools/test_npc_world_adapter.lua").read_text(encoding="utf-8-sig"))
 runtime.execute("""
 local vanillaCalls = 0
@@ -224,6 +227,8 @@ assert(baoVanillaCalls() == 1)
 """)
 runtime.execute((root / "42/media/lua/server/BAO_DebugServer.lua").read_text(encoding="utf-8-sig"))
 runtime.execute((root / "tools/test_npc_server.lua").read_text(encoding="utf-8-sig"))
+runtime.execute((root / "tools/test_npc_debug_ui.lua").read_text(encoding="utf-8-sig"))
+print("F10 NPC selection, stale removal, target, commands and response: PASS")
 print("Server authority, admin gate, target validation, snapshot, client identity/cleanup: PASS")
 print("Horde Manager: vanilla delegation, network request and selected tile: PASS")
 print("NPC world adapter: batches, same tile, IDs, death, partial failure, cleanup retry, busy route, caps: PASS")

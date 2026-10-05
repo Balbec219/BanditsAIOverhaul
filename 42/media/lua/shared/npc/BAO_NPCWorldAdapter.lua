@@ -10,12 +10,69 @@ function Adapter.Count()
     return n
 end
 local function Identity(entry)
-    return { id = entry.id, online = entry.character:getOnlineID(), outfit = entry.character:getPersistentOutfitID() }
+    local binding = BAO.NPCRuntime.Get(entry.id)
+    local ai = binding and binding.ai
+    local nav = ai and ai.NavigationSystem.GetCurrentNavigation()
+    local route
+    if nav and nav.metadata.clientDriven then
+        route = {id=nav.id,x=nav.target.x,y=nav.target.y,z=nav.target.z}
+    end
+    return { id = entry.id, online = entry.character:getOnlineID(), outfit = entry.character:getPersistentOutfitID(), route=route }
+end
+function Adapter.PublishRoutes()
+    if _G["isServer"] and isServer() and _G["sendServerCommand"] then
+        sendServerCommand("BAO_Debug", "world_status", {snapshot=true,active=Adapter.GetSnapshot(),success=true,reason="route_update"})
+    end
 end
 function Adapter.GetSnapshot()
     local list = {}
     for _, entry in pairs(Adapter.entries) do list[#list + 1] = Identity(entry) end
     return list
+end
+-- Explicit admin commands only; client-supplied IDs must belong to this adapter.
+function Adapter.CommandNPC(player, command, args)
+    if _G["isClient"] and isClient() then return false, "server_authority_required" end
+    if not player or (_G["isServer"] and isServer() and player:getAccessLevel() ~= "admin") then
+        return false, "admin_required"
+    end
+    if type(args) ~= "table" or type(args.id) ~= "string" then return false, "invalid_npc_id" end
+    local entry = Adapter.entries[args.id]
+    local binding = entry and BAO.NPCRuntime.Get(args.id)
+    if not binding or binding.character ~= entry.character or entry.cleanupPending then
+        return false, "npc_unavailable"
+    end
+    if entry.character:isDead() then return false, "npc_dead" end
+    if command == "npc_patrol" then
+        for _, key in ipairs({"x", "y", "z"}) do
+            if not Number(args[key]) then return false, "invalid_target" end
+        end
+        if math.abs(args.x-player:getX()) > 50 or math.abs(args.y-player:getY()) > 50
+            or math.floor(args.z) ~= math.floor(player:getZ())
+            or math.floor(args.z) ~= math.floor(entry.character:getZ()) then
+            return false, "target_too_far_or_other_floor"
+        end
+        local cell = _G["getCell"] and getCell()
+        local square = cell and cell:getGridSquare(math.floor(args.x), math.floor(args.y), math.floor(args.z))
+        if not square or not square:TreatAsSolidFloor() then return false, "target_unloaded_or_no_floor" end
+        local ok, reason = BAO.NPCRuntime.StartPatrol(args.id,
+            math.floor(args.x)+0.5, math.floor(args.y)+0.5, math.floor(args.z),
+            {clientDriven=_G["isServer"] and isServer() or false, stuckSeconds=10})
+        return ok, reason or (ok and "patrol_started" or "patrol_rejected")
+    elseif command == "npc_stop" then
+        local ok = BAO.NPCRuntime.StopAI(args.id, "admin_stop")
+        return ok, ok and "npc_stopped" or "npc_ai_busy"
+    elseif command == "npc_status" then
+        local ai = binding.ai
+        local nav = ai and (ai.NavigationSystem.GetCurrentNavigation() or ai.NavigationSystem.runtime.lastNavigation)
+        local last = ai and ai.AIController.GetLastActionResult()
+        return true, "npc_status", { id=args.id, state=nav and nav.state or "IDLE",
+            reason=(nav and (nav.reason or "working")) or (last and last.Reason) or "none",
+            routeId=nav and nav.id, elapsed=nav and nav.elapsed, distance=nav and nav.distance,
+            pathIssued=nav and nav.pathIssued, pathStopped=nav and nav.pathStopped,
+            targetX=nav and nav.target.x, targetY=nav and nav.target.y,
+            x=entry.character:getX(), y=entry.character:getY(), z=entry.character:getZ() }
+    end
+    return false, "unknown_npc_command"
 end
 local function Release(entry, reason)
     if BAO.NPCRuntime.IsBound(entry.id) then

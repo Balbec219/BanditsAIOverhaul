@@ -10,7 +10,7 @@ local print = BAO.InstanceLog or print
 -- Purpose:
 --   Converts abstract actions from BAO_ActionSystem
 --   into executable plans.
---
+-- пасхалко
 -- Architecture:
 --
 --   Decision

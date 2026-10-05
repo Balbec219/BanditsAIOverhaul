@@ -2,6 +2,38 @@
 BAO = BAO or {}
 local Client = { active = {}, removed = {}, lastStatus = nil, hasEntries = false }
 local applied = setmetatable({}, { __mode = "k" })
+local movement = setmetatable({}, { __mode = "k" })
+-- MP movement executor only: server still owns decisions and arrival checks.
+-- Installed B42 Bandits ZAMove uses PathFindBehavior2 on the controlling client.
+local function DriveRoute(zombie, route)
+    local state = movement[zombie]
+    if not route and not state then return end
+    if not zombie.isRemoteZombie or zombie:isRemoteZombie() then
+        movement[zombie] = nil
+        return
+    end
+    if state and (not route or state.id ~= route.id) then
+        state.behavior:cancel()
+        zombie:setPath2(nil)
+        movement[zombie] = nil
+        state = nil
+    end
+    if not route then return end
+    if not state then
+        local behavior = zombie:getPathFindBehavior2()
+        state = {id=route.id,behavior=behavior,finished=false}
+        movement[zombie] = state
+        behavior:pathToLocation(route.x,route.y,route.z)
+        print("[BAO][NPCMovement] start route=" .. route.id)
+    end
+    if state.finished then return end
+    local result = state.behavior:update()
+    local results = _G["BehaviorResult"]
+    if results and (result == results.Failed or result == results.Succeeded) then
+        state.finished = true
+        print("[BAO][NPCMovement] engine result=" .. tostring(result) .. " route=" .. state.id)
+    end
+end
 BAO.NPCWorldClient = Client
 function Client.Request(spawn, player, target)
     if not player then return false, "player_unavailable" end
@@ -19,6 +51,24 @@ local function HasEntries(entries)
     return false
 end
 local function Key(identity) return identity.online end
+function Client.GetNPCList()
+    local list = {}
+    if _G["isClient"] and isClient() then
+        for _, identity in pairs(Client.active) do list[#list+1] = identity end
+    elseif BAO.NPCWorldAdapter then list = BAO.NPCWorldAdapter.GetSnapshot() end
+    table.sort(list, function(a,b) return a.id < b.id end)
+    return list
+end
+function Client.CommandNPC(player, command, args)
+    if not player then return false, "player_unavailable" end
+    if _G["isClient"] and isClient() then
+        sendClientCommand(player, "BAO_Debug", command, args)
+        return true, "request_sent"
+    end
+    local success, reason, detail = BAO.NPCWorldAdapter.CommandNPC(player, command, args)
+    Client.OnServerCommand("BAO_Debug", "world_status", {success=success, reason=reason, npcId=args.id, detail=detail})
+    return success, reason
+end
 local function Now() return _G["getTimestampMs"] and getTimestampMs() / 1000 or os.time() end
 function Client.OnServerCommand(module, command, args)
     if module ~= "BAO_Debug" or command ~= "world_status" or type(args) ~= "table" then return end
@@ -35,8 +85,19 @@ function Client.OnServerCommand(module, command, args)
     for key in pairs(Client.active) do Client.removed[key] = nil end
     Client.hasEntries = HasEntries(Client.active) or HasEntries(Client.removed)
     Client.lastStatus = args
+    if BAO.DebugUI and BAO.DebugUI.ReceiveNPCStatus then BAO.DebugUI.ReceiveNPCStatus(args) end
     print("[BAO][NPCWorldClient] success=" .. tostring(args.success) .. " reason=" .. tostring(args.reason)
         .. " spawned=" .. tostring(args.spawned or 0))
+    if args.npcId then
+        local detail = args.detail or {}
+        print("[BAO][NPCCommand] id=" .. tostring(args.npcId) .. " state=" .. tostring(detail.state)
+            .. " reason=" .. tostring(detail.reason or args.reason)
+            .. " x=" .. tostring(detail.x) .. " y=" .. tostring(detail.y)
+            .. " route=" .. tostring(detail.routeId) .. " elapsed=" .. tostring(detail.elapsed)
+            .. " distance=" .. tostring(detail.distance) .. " pathIssued=" .. tostring(detail.pathIssued)
+            .. " pathStopped=" .. tostring(detail.pathStopped)
+            .. " target=" .. tostring(detail.targetX) .. "," .. tostring(detail.targetY))
+    end
 end
 function Client.OnZombieUpdate(zombie)
     local identity
@@ -47,7 +108,7 @@ function Client.OnZombieUpdate(zombie)
         if notice then
             if notice.expiry > Now() then
                 if zombie:getPersistentOutfitID() == notice.outfit then
-                    zombie:removeFromWorld(); zombie:removeFromSquare(); return
+                    DriveRoute(zombie, nil); zombie:removeFromWorld(); zombie:removeFromSquare(); return
                 end
             else
                 Client.removed[key] = nil
@@ -61,16 +122,18 @@ function Client.OnZombieUpdate(zombie)
         identity = adapter and adapter.byCharacter[zombie]
     end
     if not identity then
+        DriveRoute(zombie, nil)
         if applied[zombie] then zombie:setVariable("BAOHuman", false); applied[zombie] = nil end
         return
     end
-    if zombie:isDead() then return end
+    if zombie:isDead() then DriveRoute(zombie, nil); return end
     if applied[zombie] ~= identity.id then
         zombie:setVariable("BAOHuman", true)
         applied[zombie] = identity.id
     end
     zombie:setUseless(true)
     zombie:setTarget(nil)
+    if _G["isClient"] and isClient() then DriveRoute(zombie, identity.route) end
 end
 if Events and Events.OnServerCommand then Events.OnServerCommand.Add(Client.OnServerCommand) end
 if Events and Events.OnZombieUpdate then Events.OnZombieUpdate.Add(Client.OnZombieUpdate) end

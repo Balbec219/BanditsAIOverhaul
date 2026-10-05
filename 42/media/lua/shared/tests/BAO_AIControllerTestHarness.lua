@@ -58,7 +58,8 @@ local function RunIntegration()
         and execution.state == executor.STATES.EXECUTING)
 
     local callbackCount = 0
-    action.onComplete = function() callbackCount = callbackCount + 1 end
+    local function CountCompletion() callbackCount = callbackCount + 1 end
+    action.onComplete = CountCompletion
     Test("execution completion succeeds", executor.CompleteExecution(execution, "test_arrived", { test = true }))
     Test("completion synchronizes action", action.state == system.State.COMPLETED
         and action.result == system.Result.SUCCESS and action.resultData.test == true)
@@ -144,9 +145,10 @@ local function RunIntegration()
 
     action, execution = controller.GetCurrentAction(), controller.GetCurrentExecution()
     local reentrantResult
-    action.onComplete = function()
+    local function TryReentrantCompletion()
         reentrantResult = executor.CompleteExecution(execution, "recursive")
     end
+    action.onComplete = TryReentrantCompletion
     Test("callback reentry cannot finish twice", executor.CompleteExecution(execution)
         and reentrantResult == false)
     controller.Update()
@@ -161,7 +163,7 @@ local function RunIntegration()
         and controller.GetLastActionResult().Reason == "linked_action_missing")
 
     local startExecution = executor.StartExecution
-    executor.StartExecution = function() return false, "injected_start_failure" end
+    executor.StartExecution = function(_execution) return false, "injected_start_failure" end
     Test("execution start failure reported", Choose("heal") == false)
     local failedCount = controller.GetStatistics().actionsCreated
     controller.Update()

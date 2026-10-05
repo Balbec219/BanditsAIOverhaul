@@ -82,3 +82,46 @@ isClient=function() return true end
 assert(not a.SpawnTestNPC(player) and not a.RemoveTestNPC())
 isClient=function() return false end
 print('Batch lifecycle: same tile, unique bindings, death, partial failure, cleanup retry, caps PASS')
+
+-- Admin patrol commands use owned IDs, validated cells and the real per-NPC pipeline.
+assert(a.SpawnTestNPC(player))
+local entry
+for _, item in pairs(a.entries) do entry=item end
+local actor=entry.character
+local requests=0
+actor.getPathFindBehavior2=function() return {cancel=function() end} end
+actor.setPath2=function() end
+actor.pathToLocationF=function() requests=requests+1 end
+player.getAccessLevel=function() return 'none' end
+isServer=function() return true end
+local target={id=entry.id,x=15,y=10,z=0}
+local success,reason=a.CommandNPC(player,'npc_patrol',target)
+assert(not success and reason=='admin_required')
+player.getAccessLevel=function() return 'admin' end
+assert(not a.CommandNPC(player,'npc_patrol',{id='foreign',x=15,y=10,z=0}))
+assert(not a.CommandNPC(player,'npc_patrol',{id=entry.id,x=0/0,y=10,z=0}))
+assert(not a.CommandNPC(player,'npc_patrol',{id=entry.id,x=1000,y=10,z=0}))
+assert(not a.CommandNPC(player,'npc_patrol',{id=entry.id,x=15,y=10,z=1}))
+floor=false
+assert(not a.CommandNPC(player,'npc_patrol',target))
+floor=true
+assert(a.CommandNPC(player,'npc_patrol',target))
+BAO.NPCRuntime.UpdateAI(0.1)
+assert(requests==0 and a.GetSnapshot()[1].route, "MP server observes; client must drive")
+assert(not a.CommandNPC(player,'npc_patrol',target), 'busy route must not be replaced')
+local statusOK,_,detail=a.CommandNPC(player,'npc_status',{id=entry.id})
+assert(statusOK and detail.state=='PATHFINDING' and detail.reason=='working')
+assert(detail.pathIssued and detail.routeId and detail.targetX==15.5)
+local controller=BAO.NPCRuntime.Get(entry.id).ai.AIController
+local originalResult=controller.GetLastActionResult
+controller.GetLastActionResult=function() return {Reason='navigation_stuck'} end
+local _,_,fresh=a.CommandNPC(player,'npc_status',{id=entry.id})
+assert(fresh.reason=='working', 'old failure must not label a new route')
+controller.GetLastActionResult=originalResult
+assert(a.CommandNPC(player,'npc_stop',{id=entry.id}))
+assert(a.CommandNPC(player,'npc_stop',{id=entry.id}), 'stop is idempotent')
+assert(a.CommandNPC(player,'npc_patrol',target), 'restart after stop')
+BAO.NPCRuntime.UpdateAI(0.1)
+assert(requests==0 and a.GetSnapshot()[1].route)
+assert(a.RemoveTestNPC(), 'remove must stop the owned pipeline')
+isServer=function() return false end

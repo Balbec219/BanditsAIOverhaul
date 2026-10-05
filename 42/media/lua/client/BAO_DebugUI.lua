@@ -14,6 +14,7 @@
 
 require "ISUI/ISCollapsableWindow"
 require "ISUI/ISButton"
+require "ISUI/ISComboBox"
 
 ---------------------------------------------------------
 -- SAFE REFERENCES
@@ -168,6 +169,22 @@ function BAODebugWindow:createChildren()
         "REMOVE ALL TEST NPC", self, BAODebugWindow.onRemoveNPC)
     self.removeNPCButton:initialise()
     self:addChild(self.removeNPCButton)
+    self.npcSelector = _G["ISComboBox"]:new(20, titleBar + 305, 245, 24, self, nil)
+    self.npcSelector:initialise()
+    self:addChild(self.npcSelector)
+    local buttons = {
+        {275,305,115,"REFRESH NPC",BAODebugWindow.onRefreshNPC},
+        {20,338,175,"TARGET: MY TILE",BAODebugWindow.onNPCTarget},
+        {215,338,175,"START PATROL",BAODebugWindow.onNPCPatrol},
+        {20,370,175,"STOP NPC",BAODebugWindow.onNPCStop},
+        {215,370,175,"NPC STATUS",BAODebugWindow.onNPCStatus}
+    }
+    for _, item in ipairs(buttons) do
+        local button = ISButtonClass:new(item[1], titleBar+item[2], item[3], 26, item[4], self, item[5])
+        button:initialise()
+        self:addChild(button)
+    end
+    self:refreshNPCList()
 
     local startY =
         titleBar + 105
@@ -337,6 +354,10 @@ function BAODebugWindow:render()
 
     local titleBar =
         self:titleBarHeight()
+    self:drawText(self.npcTargetText or "Target: stand on destination, click TARGET: MY TILE",
+        20, titleBar+405, 1,1,1,1, UIFontClass.Small)
+    self:drawText(self.npcStatusText or "NPC: select an ID, then choose a command",
+        20, titleBar+425, 0.6,1,0.6,1, UIFontClass.Small)
 
     -----------------------------------------------------
     -- HEADER
@@ -452,8 +473,61 @@ function BAODebugWindow:runNPCCommand(spawn)
     print("[BAO][DebugUI] " .. self.lastScenario .. " " .. self.lastTestStatus
         .. " reason=" .. self.lastDecision)
 end
-function BAODebugWindow:onSpawnNPC() self:runNPCCommand(true) end
-function BAODebugWindow:onRemoveNPC() self:runNPCCommand(false) end
+function BAODebugWindow:refreshNPCList()
+    if not self.npcSelector then return end
+    local previous = self.npcIds and self.npcIds[self.npcSelector.selected]
+    self.npcSelector:clear()
+    self.npcSelector.selected = 1
+    self.npcIds = {}
+    local client = BAO.NPCWorldClient
+    for index, identity in ipairs(client and client.GetNPCList() or {}) do
+        self.npcIds[index] = identity.id
+        self.npcSelector:addOption(identity.id)
+        if identity.id == previous then self.npcSelector.selected = index end
+    end
+    if #self.npcIds == 0 then self.npcSelector:addOption("No active NPC") end
+end
+function BAODebugWindow:onRefreshNPC()
+    self:refreshNPCList()
+    if _G["isClient"] and isClient() then
+        sendClientCommand(getPlayer(), "BAO_Debug", "world_state", {})
+    end
+end
+function BAODebugWindow:onNPCTarget()
+    local player = getPlayer()
+    if not player then return end
+    self.npcTarget = {x=math.floor(player:getX()), y=math.floor(player:getY()), z=math.floor(player:getZ())}
+    local t = self.npcTarget
+    self.npcTargetText = "Target: " .. t.x .. ", " .. t.y .. ", " .. t.z
+end
+function BAODebugWindow:sendNPCOrder(command)
+    local id = self.npcIds and self.npcIds[self.npcSelector.selected]
+    if not id then self.npcStatusText = "NPC: refresh and select an active NPC"; return end
+    if command == "npc_patrol" and not self.npcTarget then
+        self.npcStatusText = "NPC: set TARGET: MY TILE first"; return
+    end
+    local t = self.npcTarget or {}
+    self.npcStatusText = "NPC: sending " .. command
+    local ok, reason = BAO.NPCWorldClient.CommandNPC(getPlayer(), command, {id=id,x=t.x,y=t.y,z=t.z})
+    if not ok then self.npcStatusText = "NPC: " .. tostring(reason) end
+end
+function BAODebugWindow:onNPCPatrol() self:sendNPCOrder("npc_patrol") end
+function BAODebugWindow:onNPCStop() self:sendNPCOrder("npc_stop") end
+function BAODebugWindow:onNPCStatus() self:sendNPCOrder("npc_status") end
+function BAO.DebugUI.ReceiveNPCStatus(args)
+    local window = BAODebugWindow.instance
+    if not window then return end
+    if args.snapshot then window:refreshNPCList() end
+    if args.npcId then
+        local detail = args.detail or {}
+        window.npcStatusText = tostring(args.npcId) .. ": " .. tostring(detail.state or args.reason)
+        if detail.reason and detail.reason ~= "none" then
+            window.npcStatusText = window.npcStatusText .. " / " .. tostring(detail.reason)
+        end
+    end
+end
+function BAODebugWindow:onSpawnNPC() self:runNPCCommand(true); self:refreshNPCList() end
+function BAODebugWindow:onRemoveNPC() self:runNPCCommand(false); self:refreshNPCList() end
 
 function BAODebugWindow:onTestButton()
     self.lastScenario = "PIPELINE"
@@ -705,9 +779,9 @@ function BAO.DebugUI.Create()
     local screenHeight =
         getCoreFunction():getScreenHeight()
 
-    local width = 410
+    local width = 560
 
-    local height = 430
+    local height = 570
 
     local x =
         math.floor(

@@ -68,3 +68,54 @@ assert(not client.hasEntries)
 client.OnServerCommand('BAO_Debug', 'world_status', { snapshot=true, active={}, removed={} })
 assert(not client.hasEntries and client.lastStatus.snapshot)
 _G.next = savedNext
+
+local commands=0
+BAO.NPCWorldAdapter.CommandNPC=function(_, command, args)
+    commands=commands+1
+    assert(command=='npc_status' and args.id=='test_1')
+    return true,'npc_status',{id=args.id,state='ARRIVED'}
+end
+player.getAccessLevel=function() return 'none' end
+server.OnClientCommand('BAO_Debug','npc_status',player,{id='test_1'})
+assert(commands==0 and last.reason=='admin_required')
+player.getAccessLevel=function() return 'admin' end
+server.OnClientCommand('BAO_Debug','npc_status',player,{id='test_1'})
+assert(commands==1 and last.detail.state=='ARRIVED' and not last.snapshot)
+client.OnServerCommand('BAO_Debug','world_status',last)
+local sent
+sendClientCommand=function(_,module,command,args) sent={module,command,args} end
+assert(client.CommandNPC(player,'npc_stop',{id='test_1'}))
+assert(sent[1]=='BAO_Debug' and sent[2]=='npc_stop' and sent[3].id=='test_1')
+local ui={getOutfit=function() return '__test_patrol' end, chr=player,
+    selectX=12,selectY=20,selectZ=0,
+    baoCommands={__test_patrol={command='npc_patrol',id='test_1'}}}
+ISSpawnHordeUI.onSpawn(ui)
+assert(sent[2]=='npc_patrol' and sent[3].id=='test_1' and sent[3].x==12)
+
+-- Only the engine's local MP owner drives; no repeated path requests while walking.
+local paths, updates, cancels = 0, 0, 0
+local remote = true
+local behavior = {pathToLocation=function() paths=paths+1 end,
+    update=function() updates=updates+1 end, cancel=function() cancels=cancels+1 end}
+actor.isRemoteZombie=function() return remote end
+actor.getPathFindBehavior2=function() return behavior end
+actor.setPath2=function() end
+local identity={id='drive_test',online=123,outfit=456,route={id='route_1',x=12.5,y=20.5,z=0}}
+client.OnServerCommand('BAO_Debug','world_status',{snapshot=true,active={identity}})
+client.OnZombieUpdate(actor)
+assert(paths==0 and updates==0)
+remote=false
+client.OnZombieUpdate(actor)
+client.OnZombieUpdate(actor)
+assert(paths==1 and updates==2)
+remote=true
+client.OnZombieUpdate(actor)
+assert(updates==2)
+remote=false
+client.OnZombieUpdate(actor)
+assert(paths==2)
+identity.route=nil
+client.OnServerCommand('BAO_Debug','world_status',{snapshot=true,active={identity}})
+client.OnZombieUpdate(actor)
+client.OnZombieUpdate(actor)
+assert(cancels==1 and updates==3)

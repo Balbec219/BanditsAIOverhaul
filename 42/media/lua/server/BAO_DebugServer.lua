@@ -618,7 +618,7 @@ function DebugServer.OnClientCommand(
         return
     end
 
-    args = args or {}
+    args = type(args) == "table" and args or {}
 
     -- All world mutation is server-authorized; state requests are read-only.
     local function Reply(result, broadcast)
@@ -628,6 +628,14 @@ function DebugServer.OnClientCommand(
     if command ~= "world_state" and (_G["isServer"] and isServer())
         and player:getAccessLevel() ~= "admin" then
         Reply({ success = false, reason = "admin_required" })
+        return
+    end
+    if command == "npc_patrol" or command == "npc_stop" or command == "npc_status" then
+        local adapter = BAO.NPCWorldAdapter
+        if not adapter then Reply({success=false, reason="adapter_unavailable"}); return end
+        local ok, success, reason, detail = pcall(adapter.CommandNPC, player, command, args)
+        if not ok then success, reason, detail = false, "npc_command_exception", nil end
+        Reply({success=success, reason=reason, npcId=args.id, detail=detail})
         return
     end
     if command == "world_spawn" or command == "spawn_npc" or command == "world_remove"

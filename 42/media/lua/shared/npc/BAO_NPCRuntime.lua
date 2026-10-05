@@ -1,6 +1,6 @@
 -- BanditsAIOverhaul NPC Runtime V1.0.
 -- Keeps transient world objects separate from persistent NPCData records.
--- This module has no OnTick work and never spawns or removes a world character.
+-- Only active AI contexts are polled, at UpdateInterval; never spawns world characters.
 local Runtime = { VERSION = "1.1", UpdateInterval = 0.1 }
 
 local function NewState()
@@ -111,7 +111,7 @@ function Runtime.Unbind(npcId, expectedCharacter, reason)
     end
 
     if binding.ai then
-        local stopped = binding.ai.AIController.StopCurrentAction(reason or "unbound")
+        local stopped = Runtime.StopAI(npcId, reason or "unbound")
         if not stopped then return false, "npc_ai_busy" end
         if not binding.ai.NavigationSystem.Reset() then return false, "npc_navigation_busy" end
         binding.ai = nil
@@ -158,6 +158,9 @@ function Runtime.SetActive(npcId, active)
     if active == true then
         local valid, reason = Runtime.IsValidCharacter(binding.character)
         if not valid then return false, reason end
+    elseif binding.ai then
+        -- Stop the engine-owned route before suspending our observer.
+        if not Runtime.StopAI(npcId, "npc_deactivated") then return false, "npc_ai_busy" end
     end
     binding.active = active == true
     local npc = NPCRecord(npcId)
@@ -209,7 +212,7 @@ function Runtime.Reset()
     for _, npcId in ipairs(Runtime.state.order) do
         local binding = Runtime.state.bindings[npcId]
         if binding and binding.ai then
-            if not binding.ai.AIController.StopCurrentAction("runtime_reset") then return false end
+            if not Runtime.StopAI(npcId, "runtime_reset") then return false end
             if not binding.ai.NavigationSystem.Reset() then return false end
         end
     end
@@ -258,9 +261,11 @@ function Runtime.StopAI(npcId, reason)
     local binding = Runtime.Get(npcId)
     if not binding or not binding.ai then return true end
     local context = binding.ai
-    if not context.AIController.StopCurrentAction(reason or "npc_stop") then return false end
+    if context.AIController.GetCurrentAction()
+        and not context.AIController.StopCurrentAction(reason or "npc_stop") then return false end
     if not context.NavigationSystem.Reset() then return false end
     context.decision = nil
+    if BAO.NPCWorldAdapter and BAO.NPCWorldAdapter.PublishRoutes then BAO.NPCWorldAdapter.PublishRoutes() end
     return true
 end
 
@@ -279,6 +284,12 @@ function Runtime.UpdateAI(delta)
             context.NavigationSystem.Update(elapsed)
             context.ActionExecutor.Update()
             context.AIController.Update()
+            local nav = context.NavigationSystem.GetCurrentNavigation()
+            local routeId = nav and nav.id or false
+            if context.publishedRoute ~= routeId then
+                context.publishedRoute = routeId
+                if BAO.NPCWorldAdapter and BAO.NPCWorldAdapter.PublishRoutes then BAO.NPCWorldAdapter.PublishRoutes() end
+            end
         end
     end
 end

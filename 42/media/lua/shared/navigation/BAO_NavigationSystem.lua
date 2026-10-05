@@ -113,6 +113,7 @@ end
 -- Cache supported methods at Start; do not probe missing Java methods every tick.
 local function StopPath(navigation)
     if not navigation.pathIssued or navigation.pathStopped then return true end
+    if navigation.metadata.clientDriven then navigation.pathStopped = true; return true end
     local ok, reason = pcall(function()
         navigation.behavior:cancel()
         navigation.character:setPath2(nil)
@@ -178,6 +179,11 @@ function NavigationSystem.Start(navigation)
     runtime.accumulated = 0
     navigation.pathIssued = true -- Even a rejected request may need engine cleanup.
     runtime.statistics.pathRequests = runtime.statistics.pathRequests + 1
+    if navigation.metadata.clientDriven then
+        navigation.state = "PATHFINDING"
+        runtime.statistics.started = runtime.statistics.started + 1
+        return true
+    end
     local ok, accepted = pcall(function()
         if target.type == "CHARACTER" then return character:pathToCharacter(target.character) end
         return character[method](character, target.x, target.y, target.z)
