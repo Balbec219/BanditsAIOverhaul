@@ -31,6 +31,7 @@ local function DriveRoute(zombie, route)
     local results = _G["BehaviorResult"]
     if results and (result == results.Failed or result == results.Succeeded) then
         state.finished = true
+        zombie:setUseless(true)
         print("[BAO][NPCMovement] engine result=" .. tostring(result) .. " route=" .. state.id)
     end
 end
@@ -131,7 +132,12 @@ function Client.OnZombieUpdate(zombie)
         zombie:setVariable("BAOHuman", true)
         applied[zombie] = identity.id
     end
-    zombie:setUseless(true)
+    -- Enable only the local route owner; idle and remote NPCs stay suppressed.
+    local isMP = _G["isClient"] and isClient()
+    local state = movement[zombie]
+    local canMove = isMP and identity.route and zombie.isRemoteZombie and not zombie:isRemoteZombie()
+        and not (state and state.id == identity.route.id and state.finished)
+    zombie:setUseless(not canMove)
     zombie:setTarget(nil)
     if _G["isClient"] and isClient() then DriveRoute(zombie, identity.route) end
 end

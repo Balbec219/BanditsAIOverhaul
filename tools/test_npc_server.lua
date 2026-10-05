@@ -95,6 +95,8 @@ assert(sent[2]=='npc_patrol' and sent[3].id=='test_1' and sent[3].x==12)
 -- Only the engine's local MP owner drives; no repeated path requests while walking.
 local paths, updates, cancels = 0, 0, 0
 local remote = true
+local useless
+actor.setUseless=function(_,value) useless=value end
 local behavior = {pathToLocation=function() paths=paths+1 end,
     update=function() updates=updates+1 end, cancel=function() cancels=cancels+1 end}
 actor.isRemoteZombie=function() return remote end
@@ -103,11 +105,11 @@ actor.setPath2=function() end
 local identity={id='drive_test',online=123,outfit=456,route={id='route_1',x=12.5,y=20.5,z=0}}
 client.OnServerCommand('BAO_Debug','world_status',{snapshot=true,active={identity}})
 client.OnZombieUpdate(actor)
-assert(paths==0 and updates==0)
+assert(paths==0 and updates==0 and useless==true)
 remote=false
 client.OnZombieUpdate(actor)
 client.OnZombieUpdate(actor)
-assert(paths==1 and updates==2)
+assert(paths==1 and updates==2 and useless==false)
 remote=true
 client.OnZombieUpdate(actor)
 assert(updates==2)
@@ -118,4 +120,4 @@ identity.route=nil
 client.OnServerCommand('BAO_Debug','world_status',{snapshot=true,active={identity}})
 client.OnZombieUpdate(actor)
 client.OnZombieUpdate(actor)
-assert(cancels==1 and updates==3)
+assert(cancels==1 and updates==3 and useless==true)
