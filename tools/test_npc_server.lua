@@ -102,6 +102,7 @@ local behavior = {pathToLocation=function() paths=paths+1 end,
 actor.isRemoteZombie=function() return remote end
 actor.getPathFindBehavior2=function() return behavior end
 actor.setPath2=function() end
+actor.pathToLocationF=function() paths=paths+1 end
 local identity={id='drive_test',online=123,outfit=456,route={id='route_1',x=12.5,y=20.5,z=0}}
 client.OnServerCommand('BAO_Debug','world_status',{snapshot=true,active={identity}})
 client.OnZombieUpdate(actor)
@@ -109,10 +110,10 @@ assert(paths==0 and updates==0 and useless==true)
 remote=false
 client.OnZombieUpdate(actor)
 client.OnZombieUpdate(actor)
-assert(paths==1 and updates==2 and useless==false)
+assert(paths==1 and updates==0 and useless==false)
 remote=true
 client.OnZombieUpdate(actor)
-assert(updates==2)
+assert(updates==0)
 remote=false
 client.OnZombieUpdate(actor)
 assert(paths==2)
@@ -120,4 +121,4 @@ identity.route=nil
 client.OnServerCommand('BAO_Debug','world_status',{snapshot=true,active={identity}})
 client.OnZombieUpdate(actor)
 client.OnZombieUpdate(actor)
-assert(cancels==1 and updates==3 and useless==true)
+assert(cancels==1 and updates==0 and useless==true)

@@ -23,25 +23,20 @@ local function DriveRoute(zombie, route)
         local behavior = zombie:getPathFindBehavior2()
         state = {id=route.id,behavior=behavior,finished=false,updates=0}
         movement[zombie] = state
-        behavior:pathToLocation(route.x,route.y,route.z)
+        zombie:pathToLocationF(route.x,route.y,route.z)
         print("[BAO][NPCMovement] start route=" .. route.id)
     end
     if state.finished then return end
-    local result = state.behavior:update()
+    -- Engine-owned GoTo movement; never update the behavior a second time.
     state.updates = state.updates + 1
     if state.updates == 60 then
-        print("[BAO][NPCMovement] probe route=" .. state.id .. " result=" .. tostring(result)
+        print("[BAO][NPCMovement] probe route=" .. state.id
             .. " state=" .. tostring(zombie.getActionStateName and zombie:getActionStateName())
             .. " moving=" .. tostring(zombie.getVariableBoolean and zombie:getVariableBoolean("bMoving"))
             .. " shouldMove=" .. tostring(state.behavior.shouldBeMoving and state.behavior:shouldBeMoving())
             .. " x=" .. tostring(zombie:getX()) .. " y=" .. tostring(zombie:getY()))
     end
-    local results = _G["BehaviorResult"]
-    if results and (result == results.Failed or result == results.Succeeded) then
-        state.finished = true
-        zombie:setUseless(true)
-        print("[BAO][NPCMovement] engine result=" .. tostring(result) .. " route=" .. state.id)
-    end
+
 end
 BAO.NPCWorldClient = Client
 function Client.Request(spawn, player, target)
@@ -146,6 +141,7 @@ function Client.OnZombieUpdate(zombie)
     local canMove = isMP and identity.route and zombie.isRemoteZombie and not zombie:isRemoteZombie()
         and not (state and state.id == identity.route.id and state.finished)
     zombie:setUseless(not canMove)
+    if zombie.setWalkType then zombie:setWalkType("BAOWalk") end
     zombie:setTarget(nil)
     if _G["isClient"] and isClient() then DriveRoute(zombie, identity.route) end
 end
