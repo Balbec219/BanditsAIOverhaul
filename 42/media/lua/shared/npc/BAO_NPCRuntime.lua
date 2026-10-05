@@ -263,7 +263,9 @@ function Runtime.StopAI(npcId, reason)
     local context = binding.ai
     if context.AIController.GetCurrentAction()
         and not context.AIController.StopCurrentAction(reason or "npc_stop") then return false end
-    if not context.NavigationSystem.Reset() then return false end
+    local navigation = context.NavigationSystem.GetCurrentNavigation()
+    if navigation and not context.NavigationSystem.Cancel(reason or "npc_stop", navigation) then return false end
+    context.publishedRoute = false
     context.decision = nil
     if BAO.NPCWorldAdapter and BAO.NPCWorldAdapter.PublishRoutes then BAO.NPCWorldAdapter.PublishRoutes() end
     return true

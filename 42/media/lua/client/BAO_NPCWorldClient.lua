@@ -21,13 +21,21 @@ local function DriveRoute(zombie, route)
     if not route then return end
     if not state then
         local behavior = zombie:getPathFindBehavior2()
-        state = {id=route.id,behavior=behavior,finished=false}
+        state = {id=route.id,behavior=behavior,finished=false,updates=0}
         movement[zombie] = state
         behavior:pathToLocation(route.x,route.y,route.z)
         print("[BAO][NPCMovement] start route=" .. route.id)
     end
     if state.finished then return end
     local result = state.behavior:update()
+    state.updates = state.updates + 1
+    if state.updates == 60 then
+        print("[BAO][NPCMovement] probe route=" .. state.id .. " result=" .. tostring(result)
+            .. " state=" .. tostring(zombie.getActionStateName and zombie:getActionStateName())
+            .. " moving=" .. tostring(zombie.getVariableBoolean and zombie:getVariableBoolean("bMoving"))
+            .. " shouldMove=" .. tostring(state.behavior.shouldBeMoving and state.behavior:shouldBeMoving())
+            .. " x=" .. tostring(zombie:getX()) .. " y=" .. tostring(zombie:getY()))
+    end
     local results = _G["BehaviorResult"]
     if results and (result == results.Failed or result == results.Succeeded) then
         state.finished = true

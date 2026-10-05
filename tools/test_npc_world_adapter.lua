@@ -118,10 +118,11 @@ controller.GetLastActionResult=function() return {Reason='navigation_stuck'} end
 local _,_,fresh=a.CommandNPC(player,'npc_status',{id=entry.id})
 assert(fresh.reason=='working', 'old failure must not label a new route')
 controller.GetLastActionResult=originalResult
+local firstRoute=a.GetSnapshot()[1].route.id
 assert(a.CommandNPC(player,'npc_stop',{id=entry.id}))
 assert(a.CommandNPC(player,'npc_stop',{id=entry.id}), 'stop is idempotent')
 assert(a.CommandNPC(player,'npc_patrol',target), 'restart after stop')
 BAO.NPCRuntime.UpdateAI(0.1)
-assert(requests==0 and a.GetSnapshot()[1].route)
+assert(requests==0 and a.GetSnapshot()[1].route and a.GetSnapshot()[1].route.id ~= firstRoute, "restart must use a fresh route ID")
 assert(a.RemoveTestNPC(), 'remove must stop the owned pipeline')
 isServer=function() return false end
